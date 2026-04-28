@@ -1,16 +1,12 @@
 # job_scorer.py
 import json
 import logging
+import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import RELEVANCE_THRESHOLD
-from search_profile import (
-    EXCLUDE_TITLE_KEYWORDS,
-    EXCLUDE_EMPLOYMENT_TITLE_KEYWORDS as EXCLUDE_EMPLOYMENT_KEYWORDS,
-    EXCLUDE_EMPLOYMENT_DESCRIPTION_PHRASES,
-    EXCLUDE_REQUIREMENT_KEYWORDS,
-    SENIOR_EXPERIENCE_YEAR_THRESHOLD,
-)
 from job_cache import (
     cache_stats, filter_seen_jobs, load_cache,
     mark_seen, prune_cache, save_cache,
@@ -18,22 +14,61 @@ from job_cache import (
 from llm_client import invoke_llm
 from models import Job, JobCache
 from preference_engine import load_profile
+from search_profile import (
+    EXCLUDE_TITLE_KEYWORDS,
+    EXCLUDE_EMPLOYMENT_TITLE_KEYWORDS as EXCLUDE_EMPLOYMENT_KEYWORDS,
+    EXCLUDE_EMPLOYMENT_DESCRIPTION_PHRASES,
+    EXCLUDE_REQUIREMENT_KEYWORDS,
+    SENIOR_EXPERIENCE_YEAR_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Parallel scoring
+#
+# Each job is scored by an independent LLM call.  With a local Ollama model
+# these calls are CPU-bound on the inference side but network-bound from
+# Python's perspective (HTTP to localhost), so threading gives real
+# concurrency without the GIL being a bottleneck.
+#
+# Default: 3 workers — enough to keep Ollama's queue fed without hammering
+# a single-GPU machine.  Raise via SCORER_WORKERS in .env if you are using
+# an API-backed model (Anthropic, OpenAI, Groq) where concurrency is cheap.
+#
+#   SCORER_WORKERS=8   # good starting point for API-backed models
+#   SCORER_WORKERS=1   # effectively disables parallelism (serial behaviour)
+# ---------------------------------------------------------------------------
+_SCORER_WORKERS: int = int(os.getenv("SCORER_WORKERS", "3"))
+
+# ---------------------------------------------------------------------------
+# Cache write lock
+#
+# The job cache (seen_jobs.json) is a shared dict mutated by mark_seen()
+# and flushed to disk by save_cache() after each scored job.  With parallel
+# workers both operations must be serialised to prevent torn writes.
+# The LLM call itself (score_job) holds no lock — it only touches the
+# job dict it was handed, which is not shared with any other worker.
+# ---------------------------------------------------------------------------
+_cache_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Resume summary cache
 #
 # The raw resume is typically 3,000+ characters and identical for every
-# scoring call in a run. We extract a compact skills summary once per
+# scoring call in a run.  We extract a compact skills summary once per
 # process lifetime via get_resume_summary(), then inject that ~200 word
-# block instead of the full text. This cuts per-call prompt size by ~60%.
+# block instead of the full text.  This cuts per-call prompt size by ~60%.
 #
 # The summary is keyed by the first 64 chars of the resume so a changed
 # file invalidates the cache automatically.
 # ---------------------------------------------------------------------------
-
 _SUMMARY_CACHE: dict[str, str] = {}   # key → summary text
+
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
 
 RESUME_SUMMARY_PROMPT = """\
 Extract a compact candidate profile from this résumé. Focus only on what \
@@ -109,7 +144,7 @@ def _resume_cache_key(resume_text: str) -> str:
 def _extract_resume_summary(resume_text: str) -> str:
     """
     Call the LLM once to produce a compact JSON candidate profile from the
-    full resume text. Returns a formatted multi-line string on success, or
+    full resume text.  Returns a formatted multi-line string on success, or
     a plain-text fallback derived from the raw resume on failure.
 
     The result is stored in _SUMMARY_CACHE so it is only computed once
@@ -179,7 +214,7 @@ _SENIOR_EXPERIENCE_PATTERNS = [
 def has_disqualifying_requirements(job: Job) -> bool:
     """Return True if the job requires a security clearance or similar."""
     title_lower = job.get("title", "").lower()
-    desc_lower = job.get("description", "").lower()
+    desc_lower  = job.get("description", "").lower()
     return any(
         kw in title_lower or kw in desc_lower
         for kw in EXCLUDE_REQUIREMENT_KEYWORDS
@@ -192,7 +227,7 @@ def is_too_senior(job: Job) -> bool:
     management role that is beyond the target experience level.
     """
     title_lower = job.get("title", "").lower()
-    desc_lower = job.get("description", "").lower()
+    desc_lower  = job.get("description", "").lower()
 
     if any(kw in title_lower for kw in EXCLUDE_TITLE_KEYWORDS):
         return True
@@ -214,7 +249,7 @@ def is_not_fulltime(job: Job) -> bool:
     temporary, or otherwise not full-time permanent employment.
     """
     title_lower = job.get("title", "").lower()
-    desc_lower = job.get("description", "").lower()
+    desc_lower  = job.get("description", "").lower()
 
     if any(kw in title_lower for kw in EXCLUDE_EMPLOYMENT_KEYWORDS):
         return True
@@ -240,7 +275,9 @@ def score_job(
     Parameters
     ----------
     job:
-        The job dict to score.
+        The job dict to score.  This function mutates it in-place (adds
+        ``score`` and ``score_reason``) and also returns it for convenience.
+        Each worker receives a distinct job dict so there is no shared state.
     candidate_profile:
         Compact candidate profile string produced by get_resume_summary().
         Inject this — do not pass raw resume text here.
@@ -264,18 +301,18 @@ def score_job(
     )
 
     try:
-        raw = invoke_llm(prompt)
+        raw   = invoke_llm(prompt)
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if match:
             result = json.loads(match.group())
-            job["score"] = int(result.get("score", 0))
+            job["score"]        = int(result.get("score", 0))
             job["score_reason"] = result.get("reason", "")
         else:
-            job["score"] = 0
+            job["score"]        = 0
             job["score_reason"] = "Could not parse score from LLM response"
             logger.warning("Could not parse score for '%s'", job.get("title"))
     except Exception:
-        job["score"] = 0
+        job["score"]        = 0
         job["score_reason"] = "Scoring error — see logs"
         logger.exception("Scoring failed for '%s'", job.get("title"))
 
@@ -289,11 +326,15 @@ def score_job(
 def filter_and_score_jobs(jobs: list[Job], resume_text: str) -> list[Job]:
     """
     Load cache and preference profile, filter seen / ineligible jobs,
-    score the remainder, and persist results to the cache.
+    score the remainder in parallel, and persist results to the cache.
 
     The resume is summarised once via get_resume_summary() before the
     scoring loop — all per-job LLM calls receive the compact profile
     rather than the raw resume text.
+
+    Parallelism is controlled by SCORER_WORKERS (default 3).  Each worker
+    calls score_job() independently; cache writes are serialised via
+    _cache_lock so the JSON file is never torn.
     """
     cache: JobCache = load_cache()
     logger.info("[Cache] %s", cache_stats(cache))
@@ -335,35 +376,66 @@ def filter_and_score_jobs(jobs: list[Job], resume_text: str) -> list[Job]:
         save_cache(cache)
         return []
 
-    # Extract compact resume summary once for the whole run
+    # Extract compact resume summary once — shared read-only across all workers
     candidate_profile = get_resume_summary(resume_text)
 
     preference_profile = load_profile()
     if preference_profile:
-        logger.info(
-            "[Preferences] Profile loaded — adjusting scores accordingly"
-        )
+        logger.info("[Preferences] Profile loaded — adjusting scores accordingly")
     else:
+        logger.info("[Preferences] No profile yet — scoring on résumé match only")
+
+    total = len(jobs)
+    logger.info(
+        "Scoring %d new jobs against your résumé… (%d worker%s)",
+        total, _SCORER_WORKERS, "s" if _SCORER_WORKERS != 1 else "",
+    )
+
+    # completed_count is only read/written under _cache_lock, so no
+    # separate atomic is needed.
+    completed_count = 0
+    scored: list[Job] = []
+
+    def _score_and_cache(job: Job) -> Job:
+        """Score one job then serialise the cache update."""
+        result = score_job(job, candidate_profile, preference_profile)
+
+        nonlocal completed_count
+        with _cache_lock:
+            completed_count += 1
+            n = completed_count
+            mark_seen(job["url"], result, cache)
+            save_cache(cache)
+
         logger.info(
-            "[Preferences] No profile yet — scoring on résumé match only"
+            "  [%d/%d] [%d/10] %s @ %s | %s",
+            n, total,
+            result["score"],
+            result.get("title", "?"),
+            result.get("company", "?"),
+            result.get("salary", "Not specified"),
         )
+        return result
 
-    logger.info("Scoring %d new jobs against your résumé…", len(jobs))
-    scored: list[dict] = []
-
-    for i, job in enumerate(jobs):
-        logger.info(
-            "  [%d/%d] Scoring: %s @ %s | %s",
-            i + 1, len(jobs),
-            job.get("title", "?"), job.get("company", "?"),
-            job.get("salary", "Not specified"),
-        )
-        scored_job = score_job(job, candidate_profile, preference_profile)
-        scored.append(scored_job)
-
-        # Persist immediately so progress survives a killed run
-        mark_seen(job["url"], scored_job, cache)
-        save_cache(cache)
+    with ThreadPoolExecutor(
+        max_workers=_SCORER_WORKERS,
+        thread_name_prefix="scorer",
+    ) as pool:
+        futures = {pool.submit(_score_and_cache, job): job for job in jobs}
+        for future in as_completed(futures):
+            try:
+                scored.append(future.result())
+            except Exception:
+                job = futures[future]
+                logger.exception(
+                    "Unhandled error scoring '%s' @ '%s'",
+                    job.get("title", "?"), job.get("company", "?"),
+                )
+                # Ensure a failed job still gets a score so it flows
+                # through the pipeline and can be filtered below
+                job.setdefault("score", 0)
+                job.setdefault("score_reason", "Unhandled scoring error")
+                scored.append(job)
 
     matched = [j for j in scored if j["score"] >= RELEVANCE_THRESHOLD]
     logger.info(
