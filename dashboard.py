@@ -1,5 +1,6 @@
 # dashboard.py
 import functools
+import hashlib
 import hmac
 import logging
 import os
@@ -26,6 +27,7 @@ from database import (
     get_failed_cover_letters,
     get_job_by_id,
     get_stats,
+    init_db,
     save_interview_prep,
     update_status,
 )
@@ -34,17 +36,38 @@ from logger import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Schema initialisation
+#
+# Called explicitly here rather than relying on a module-level side effect
+# in database.py — init_db() is now opt-in after the database.py refactor.
+# ---------------------------------------------------------------------------
+init_db()
+
 app = Flask(__name__)
 
-# Flask needs a secret key to sign session cookies.
-# We derive one from DASHBOARD_SECRET if set, otherwise generate a
-# random key per process (sessions won't survive restarts, but that
-# is acceptable — users just have to log in again after a restart).
-app.secret_key = (
-    f"job-agent-{DASHBOARD_SECRET}".encode()
-    if DASHBOARD_SECRET
-    else os.urandom(32)
-)
+# ---------------------------------------------------------------------------
+# Session secret key
+#
+# Previously derived as f"job-agent-{DASHBOARD_SECRET}".encode(), which
+# produces a low-entropy, predictable key when DASHBOARD_SECRET is a short
+# human-chosen password.  We now run it through SHA-256 to give the key
+# full 256-bit entropy regardless of password length or character set.
+#
+# The salt prefix ("job-agent-session-v1:") domain-separates this key from
+# any other derivations that might use DASHBOARD_SECRET in future, and the
+# "v1" lets us rotate the derivation scheme without invalidating the env var.
+#
+# If DASHBOARD_SECRET is not set, a random 32-byte key is generated per
+# process — sessions won't survive restarts, but that is acceptable when
+# the dashboard is running without auth (localhost-only deployments).
+# ---------------------------------------------------------------------------
+if DASHBOARD_SECRET:
+    app.secret_key = hashlib.sha256(
+        f"job-agent-session-v1:{DASHBOARD_SECRET}".encode()
+    ).digest()
+else:
+    app.secret_key = os.urandom(32)
 
 
 # ---------------------------------------------------------------------------
@@ -142,10 +165,10 @@ def logout():
 def index():
     status = request.args.get("status")
     source = request.args.get("source")
-    score = request.args.get("score", type=int)
+    score  = request.args.get("score", type=int)
 
-    jobs = get_all_jobs(status=status, min_score=score, source=source)
-    stats = get_stats()
+    jobs    = get_all_jobs(status=status, min_score=score, source=source)
+    stats   = get_stats()
     sources = sorted(set(j["source"] for j in get_all_jobs() if j["source"]))
 
     return render_template(
@@ -179,8 +202,8 @@ def interview_prep_page():
     prep_jobs = get_all_interview_prep()
 
     # Jobs currently interviewing that don't have a prep sheet yet
-    interviewing = get_all_jobs(status="interviewing")
-    prep_ids = {j["id"] for j in prep_jobs}
+    interviewing   = get_all_jobs(status="interviewing")
+    prep_ids       = {j["id"] for j in prep_jobs}
     interviewing_no_prep = [j for j in interviewing if j["id"] not in prep_ids]
 
     return render_template(
@@ -204,9 +227,9 @@ def api_get_job(job_id: int):
         return jsonify({"error": "Not found"}), 404
 
     from salary_normalizer import market_comparison, parse_salary
-    info = parse_salary(job.get("salary") or "")
+    info             = parse_salary(job.get("salary") or "")
     company_research = get_company_for_job(job_id)
-    comparison = market_comparison(info, company_research, job.get("title", ""))
+    comparison       = market_comparison(info, company_research, job.get("title", ""))
 
     result = dict(job)
     result["salary_comparison"] = comparison
@@ -216,9 +239,9 @@ def api_get_job(job_id: int):
 @app.route("/api/job/<int:job_id>/status", methods=["POST"])
 @login_required
 def api_update_status(job_id: int):
-    data = request.get_json(silent=True) or {}
+    data   = request.get_json(silent=True) or {}
     status = data.get("status")
-    notes = (data.get("notes") or "").strip() or None
+    notes  = (data.get("notes") or "").strip() or None
     if not status:
         return jsonify({"error": "status field required"}), 400
     try:
@@ -253,7 +276,7 @@ def api_refresh_company(company_name: str):
     thread.start()
     logger.info("Research refresh started for %s", company_name)
     return jsonify({
-        "status": "started",
+        "status":  "started",
         "message": f"Research refresh started for {company_name}",
     })
 
@@ -266,9 +289,9 @@ def api_get_interview_prep(job_id: int):
     if not job:
         return jsonify({"error": "Not found"}), 404
     return jsonify({
-        "job_id": job_id,
-        "title": job.get("title"),
-        "company": job.get("company"),
+        "job_id":        job_id,
+        "title":         job.get("title"),
+        "company":       job.get("company"),
         "interview_prep": job.get("interview_prep") or "",
     })
 
@@ -295,7 +318,7 @@ def api_generate_interview_prep(job_id: int):
     thread.start()
     logger.info("Interview prep generation started for job %d", job_id)
     return jsonify({
-        "status": "ok",
+        "status":  "ok",
         "message": f"Prep sheet generation started for job {job_id}",
     })
 
@@ -324,7 +347,7 @@ def api_generate_cover_letter(job_id: int):
     thread.start()
     logger.info("Cover letter generation (with research) started for job %d", job_id)
     return jsonify({
-        "status": "ok",
+        "status":  "ok",
         "message": f"Research and cover letter generation started for job {job_id}",
     })
 
