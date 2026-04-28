@@ -1,6 +1,6 @@
 # job-agent
 
-I built this to stop spending hours a day manually trawling job boards. It pulls listings from 10 sources, scores them against my résumé using a local LLM, and drops the good ones into a dashboard where I can track applications, generate cover letters, and prep for interviews — all without sending my data to any third-party service.
+I built this to stop spending hours a day manually trawling job boards. It pulls listings from 10 sources, scores them against my résumé using a local LLM, and drops the good ones into a dashboard where I can track applications, generate cover letters, and prep for interviews — all without sending my data to any third-party service. Yes I vibecoded this; I didn't want to spend weeks coding a job hunting assistant, I wanted a job hunting assistant. I also believe *smart* use of AI as a tool and knowing how to frame what you want a tool to do has its legitimacies. I have reviewed this code and tried to make it as clean as possible to the best of my abilities, however since I'm not a senior Python developer if you find something the vibecoder and his henchman missed do feel free to submit a PR.
 
 ---
 
