@@ -1,0 +1,17 @@
+[Unit]
+Description=Job Agent Pipeline Runner
+After=network.target
+
+[Service]
+User=user
+WorkingDirectory=/home/user/job-agent
+Environment=PATH=/home/user/job-agent/venv/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/user/job-agent/venv/bin/python runner.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

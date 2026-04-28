@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block title %}Company Research — Job Agent{% endblock %}
+
+{% block header_title %}🤖 Job Agent — Company Research{% endblock %}
+
+{% block header_meta %}
+<span style="font-size:0.85rem; opacity:0.8;">
+    {{ companies|length }} companies researched
+</span>
+{% endblock %}
+
+{% block extra_styles %}
+        .container { padding: 20px 24px; }
+
+        .company-card {
+            background: var(--bg-secondary);
+            border-radius: 10px;
+            box-shadow: 0 1px 3px var(--shadow);
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+        .company-header {
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border);
+        }
+        .company-header:hover { background: var(--bg-hover); }
+        .company-name {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        .company-meta {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+        .refresh-btn {
+            padding: 5px 12px;
+            background: var(--accent-light);
+            color: var(--accent);
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+        .company-body { display: none; padding: 20px; }
+        .company-body.open { display: block; }
+
+        .research-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .research-section h3 {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .research-section p {
+            font-size: 0.9rem;
+            line-height: 1.6;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+        }
+
+        .summary-box {
+            background: var(--accent-light);
+            border-left: 4px solid var(--accent);
+            padding: 12px 16px;
+            border-radius: 0 8px 8px 0;
+            margin-top: 8px;
+        }
+        .summary-box h3 {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            color: var(--accent);
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .summary-box p {
+            font-size: 0.9rem;
+            line-height: 1.6;
+            color: var(--text-primary);
+        }
+
+        .research-status {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .status-in-progress { background: #fefcbf; color: #744210; }
+        .status-failed      { background: #fed7d7; color: #9b2c2c; }
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    {% if companies %}
+        {% for company in companies %}
+        <div class="company-card">
+            <div class="company-header" onclick="toggleCard('company-{{ loop.index }}')">
+                <div>
+                    <div class="company-name">
+                        {{ company.name }}
+                        {% if company.research_status == 'in_progress' %}
+                        <span class="research-status status-in-progress">researching…</span>
+                        {% elif company.research_status == 'failed' %}
+                        <span class="research-status status-failed">failed</span>
+                        {% endif %}
+                    </div>
+                    <div class="company-meta">
+                        Researched {{ company.date_researched or 'pending' }}
+                    </div>
+                </div>
+                <button class="refresh-btn"
+                        onclick="refreshCompany('{{ company.name }}', event)">
+                    Refresh
+                </button>
+            </div>
+            <div class="company-body" id="company-{{ loop.index }}">
+                <div class="summary-box">
+                    <h3>Summary</h3>
+                    <p>{{ company.research_summary or 'Not available.' }}</p>
+                </div>
+                <br>
+                <div class="research-grid">
+                    <div class="research-section">
+                        <h3>Overview</h3>
+                        <p>{{ company.overview or 'Not available.' }}</p>
+                    </div>
+                    <div class="research-section">
+                        <h3>Tech Stack</h3>
+                        <p>{{ company.tech_stack or 'Not available.' }}</p>
+                    </div>
+                    <div class="research-section">
+                        <h3>Culture &amp; Environment</h3>
+                        <p>{{ company.culture or 'Not available.' }}</p>
+                    </div>
+                    <div class="research-section">
+                        <h3>Financial Health</h3>
+                        <p>{{ company.financial_health or 'Not available.' }}</p>
+                    </div>
+                    <div class="research-section">
+                        <h3>Interview Process</h3>
+                        <p>{{ company.interview_process or 'Not available.' }}</p>
+                    </div>
+                    <div class="research-section">
+                        <h3>Remote Work Policy</h3>
+                        <p>{{ company.remote_policy or 'Not available.' }}</p>
+                    </div>
+                    <div class="research-section" style="grid-column: span 2">
+                        <h3>Recent News</h3>
+                        <p>{{ company.recent_news or 'Not available.' }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="empty">
+            No company research yet.<br><br>
+            Mark a job as <strong>applied</strong> or
+            <strong>interviewing</strong> in the dashboard
+            to trigger automatic research.
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+    function toggleCard(id) {
+        document.getElementById(id).classList.toggle('open');
+    }
+
+    async function refreshCompany(name, event) {
+        event.stopPropagation();
+        const btn = event.target;
+        btn.textContent = 'Refreshing...';
+        btn.disabled = true;
+        await fetch('/api/company/refresh/' + encodeURIComponent(name), {method: 'POST'});
+        btn.textContent = 'Started — reload in a few minutes';
+    }
+{% endblock %}

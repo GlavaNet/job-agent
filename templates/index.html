@@ -1,0 +1,504 @@
+{% extends "base.html" %}
+
+{% block title %}Job Agent Dashboard{% endblock %}
+
+{% block header_title %}🤖 Job Agent Dashboard{% endblock %}
+
+{% block header_meta %}
+<span style="font-size:0.85rem; opacity:0.8;">
+    {{ stats.total }} jobs tracked
+</span>
+{% endblock %}
+
+{% block extra_styles %}
+        .stats-bar {
+            background: var(--bg-secondary);
+            padding: 12px 24px;
+            display: flex;
+            gap: 24px;
+            border-bottom: 1px solid var(--border);
+            flex-wrap: wrap;
+        }
+        .stat { text-align: center; }
+        .stat .value {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .stat .label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .filters {
+            background: var(--bg-secondary);
+            padding: 12px 24px;
+            display: flex;
+            gap: 12px;
+            border-bottom: 1px solid var(--border);
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .filters select, .filters input {
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.9rem;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        .filters button {
+            padding: 6px 14px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .jobs-table {
+            margin: 20px 24px;
+            background: var(--bg-secondary);
+            border-radius: 10px;
+            box-shadow: 0 1px 3px var(--shadow);
+            overflow: hidden;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+        th {
+            background: var(--bg-tertiary);
+            padding: 10px 14px;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+        }
+        td {
+            padding: 10px 14px;
+            border-top: 1px solid var(--border);
+            vertical-align: middle;
+            color: var(--text-primary);
+        }
+        tr:hover { background: var(--bg-hover); }
+
+        .score {
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+        }
+        .score-high { background: var(--score-high-bg); color: var(--score-high-text); }
+        .score-mid  { background: var(--score-mid-bg);  color: var(--score-mid-text); }
+        .score-low  { background: var(--score-low-bg);  color: var(--score-low-text); }
+
+        .status-badge {
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .status-not-applied  { background: var(--status-default-bg); color: var(--status-default-fg); }
+        .status-applied      { background: #2a4a6b; color: #bee3f8; }
+        .status-interviewing { background: var(--score-high-bg); color: var(--score-high-text); }
+        .status-offer        { background: var(--score-mid-bg); color: var(--score-mid-text); }
+        .status-rejected     { background: var(--score-low-bg); color: var(--score-low-text); }
+        .status-withdrawn    { background: var(--status-default-bg); color: var(--text-muted); }
+
+        [data-theme="dark"] .status-applied { background: #2c5282; color: #bee3f8; }
+
+        .btn {
+            padding: 4px 10px;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.8rem;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-view { background: var(--accent-light); color: var(--accent); }
+        .btn-view:hover { background: var(--accent-hover); }
+
+        .empty { padding: 40px; }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: var(--modal-overlay);
+            z-index: 100;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        .modal {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 24px;
+            color: var(--text-primary);
+        }
+        .modal h2 { font-size: 1.2rem; margin-bottom: 4px; }
+        .modal .company { color: var(--text-muted); margin-bottom: 16px; }
+        .modal-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 16px;
+            font-size: 0.9rem;
+        }
+        .modal-field label {
+            font-weight: 600;
+            color: var(--text-secondary);
+            display: block;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+        }
+        .cover-letter {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            white-space: pre-wrap;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+        }
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .modal-actions select {
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+        .modal-actions button {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn-save  { background: var(--accent); color: white; }
+        .btn-close { background: var(--bg-tertiary); color: var(--text-secondary); }
+        .btn-link {
+            background: var(--score-high-bg);
+            color: var(--score-high-text);
+            padding: 8px 16px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .notes-input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 0.9rem;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+{% endblock %}
+
+{% block content %}
+<div class="stats-bar">
+    <div class="stat">
+        <div class="value">{{ stats.total }}</div>
+        <div class="label">Total</div>
+    </div>
+    {% for status, count in stats.by_status.items() %}
+    <div class="stat">
+        <div class="value">{{ count }}</div>
+        <div class="label">{{ status }}</div>
+    </div>
+    {% endfor %}
+    <div class="stat">
+        <div class="value">{{ stats.avg_score }}</div>
+        <div class="label">Avg Score</div>
+    </div>
+</div>
+
+{% if failed_cover_letters %}
+<div style="margin: 12px 0; background: var(--failed-bg); border-left: 4px solid var(--failed-border);
+            border-radius: 0 8px 8px 0; padding: 12px 18px; display: flex;
+            justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+    <div>
+        <strong style="color: var(--failed-text);">
+            ⚠ {{ failed_cover_letters|length }} cover letter{{ 's' if failed_cover_letters|length != 1 else '' }} failed to generate
+        </strong>
+        <span style="font-size: 0.85rem; color: var(--text-muted); margin-left: 8px;">
+            {% for j in failed_cover_letters %}{{ j.title }} @ {{ j.company }}{% if not loop.last %}, {% endif %}{% endfor %}
+        </span>
+    </div>
+    <button onclick="retryAllCoverLetters(this)"
+            style="padding: 6px 16px; background: var(--failed-border);
+                   color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; white-space: nowrap;">
+        Retry All
+    </button>
+</div>
+{% endif %}
+
+<form class="filters" method="GET" action="/">
+    <select name="status">
+        <option value="">All statuses</option>
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>
+            {{ s }}
+        </option>
+        {% endfor %}
+    </select>
+    <select name="source">
+        <option value="">All sources</option>
+        {% for src in sources %}
+        <option value="{{ src }}" {% if filters.source == src %}selected{% endif %}>
+            {{ src }}
+        </option>
+        {% endfor %}
+    </select>
+    <input type="number" name="score" placeholder="Min score"
+           value="{{ filters.score or '' }}" min="1" max="10"
+           style="width:100px">
+    <button type="submit">Filter</button>
+    <a href="/" style="font-size:0.85rem; color:var(--text-muted); text-decoration:none;">
+        Clear
+    </a>
+</form>
+
+<div class="jobs-table">
+    {% if jobs %}
+    <table>
+        <thead>
+            <tr>
+                <th>Score</th>
+                <th>Title</th>
+                <th>Company</th>
+                <th>Location</th>
+                <th>Salary</th>
+                <th>Source</th>
+                <th>Status</th>
+                <th>Seen</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for job in jobs %}
+            <tr>
+                <td>
+                    <span class="score
+                        {% if job.score >= 8 %}score-high
+                        {% elif job.score >= 6 %}score-mid
+                        {% else %}score-low{% endif %}">
+                        {{ job.score }}/10
+                    </span>
+                </td>
+                <td>{{ job.title }}</td>
+                <td>{{ job.company }}</td>
+                <td>{{ job.location }}</td>
+                <td>{{ job.salary }}</td>
+                <td>{{ job.source }}</td>
+                <td>
+                    <span class="status-badge status-{{ job.status | replace(' ', '-') }}">
+                        {{ job.status }}
+                    </span>
+                </td>
+                <td>{{ job.date_seen }}</td>
+                <td>
+                    <a class="btn btn-view" href="#"
+                       onclick="viewJob({{ job.id }}); return false;">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+        No jobs found. Run the pipeline to populate the database.
+    </div>
+    {% endif %}
+</div>
+
+<div class="modal-overlay" id="modal">
+    <div class="modal">
+        <h2 id="modal-title"></h2>
+        <div class="modal-company" id="modal-company"></div>
+        <div class="modal-grid">
+            <div class="modal-field">
+                <label>Location</label>
+                <span id="modal-location"></span>
+            </div>
+            <div class="modal-field">
+                <label>Salary</label>
+                <span id="modal-salary"></span>
+                <span id="modal-salary-comparison"
+                      style="display:none; font-size:0.8rem; margin-top:3px;
+                             color:var(--text-muted); display:block;"></span>
+            </div>
+            <div class="modal-field">
+                <label>Score</label>
+                <span id="modal-score"></span>
+            </div>
+            <div class="modal-field">
+                <label>Source</label>
+                <span id="modal-source"></span>
+            </div>
+            <div class="modal-field" style="grid-column: span 2">
+                <label>Score Reasoning</label>
+                <span id="modal-reason"></span>
+            </div>
+        </div>
+        <div class="cover-letter" id="modal-cover-letter"></div>
+        <textarea class="notes-input" id="modal-notes"
+                  placeholder="Notes (optional)..." rows="2"></textarea>
+        <div class="modal-actions">
+            <select id="modal-status-select"></select>
+            <button class="btn-save" onclick="saveStatus()">Save Status</button>
+            <button class="btn-cover-letter" id="modal-cover-letter-btn"
+                    onclick="generateCoverLetter()" style="display:none;">
+                Generate Cover Letter
+            </button>
+            <a class="btn-link" id="modal-url" href="#"
+               target="_blank">Open Job Posting ↗</a>
+            <button class="btn-close" onclick="closeModal()">Close</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+    let currentJobId = null;
+
+    async function viewJob(id) {
+        currentJobId = id;
+        const resp = await fetch('/api/job/' + id);
+        const job = await resp.json();
+
+        document.getElementById('modal-title').textContent = job.title;
+        document.getElementById('modal-company').textContent = job.company;
+        document.getElementById('modal-location').textContent = job.location;
+        document.getElementById('modal-salary').textContent = job.salary;
+        const compEl = document.getElementById('modal-salary-comparison');
+        if (job.salary_comparison) {
+            compEl.textContent = job.salary_comparison;
+            compEl.style.display = 'block';
+        } else {
+            compEl.style.display = 'none';
+        }
+        document.getElementById('modal-score').textContent = job.score + '/10';
+        document.getElementById('modal-source').textContent = job.source;
+        document.getElementById('modal-reason').textContent = job.score_reason;
+        document.getElementById('modal-cover-letter').textContent =
+            job.cover_letter || 'No cover letter generated yet.';
+        document.getElementById('modal-notes').value = job.notes || '';
+        document.getElementById('modal-url').href = job.url;
+
+        // Show "Generate Cover Letter" button only when no letter exists
+        // or the previous attempt failed. Hide it when one is ready or
+        // generation is currently in progress.
+        const clBtn = document.getElementById('modal-cover-letter-btn');
+        const clStatus = job.cover_letter_status;
+        const hasCoverLetter = job.cover_letter && job.cover_letter.trim().length > 0;
+        if (!hasCoverLetter && clStatus !== 'in_progress') {
+            clBtn.style.display = 'inline-block';
+            clBtn.textContent = clStatus === 'failed'
+                ? 'Retry Cover Letter'
+                : 'Generate Cover Letter';
+            clBtn.disabled = false;
+        } else if (clStatus === 'in_progress') {
+            clBtn.style.display = 'inline-block';
+            clBtn.textContent = 'Generating…';
+            clBtn.disabled = true;
+        } else {
+            clBtn.style.display = 'none';
+        }
+
+        const sel = document.getElementById('modal-status-select');
+        sel.innerHTML = '';
+        const statuses = {{ statuses | tojson }};
+        statuses.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s;
+            opt.textContent = s;
+            if (s === job.status) opt.selected = true;
+            sel.appendChild(opt);
+        });
+
+        document.getElementById('modal').style.display = 'block';
+    }
+
+    async function saveStatus() {
+        const status = document.getElementById('modal-status-select').value;
+        const notes = document.getElementById('modal-notes').value;
+        await fetch('/api/job/' + currentJobId + '/status', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({status, notes})
+        });
+        closeModal();
+        location.reload();
+    }
+
+    async function generateCoverLetter() {
+        const btn = document.getElementById('modal-cover-letter-btn');
+        btn.textContent = 'Researching company…';
+        btn.disabled = true;
+        try {
+            const resp = await fetch(
+                '/api/cover-letter/' + currentJobId + '/generate',
+                {method: 'POST'}
+            );
+            const data = await resp.json();
+            if (data.status === 'ok') {
+                btn.textContent = 'Writing cover letter… (reload when ready)';
+            } else {
+                btn.textContent = 'Error — see logs';
+                btn.disabled = false;
+            }
+        } catch (e) {
+            btn.textContent = 'Error — see logs';
+            btn.disabled = false;
+        }
+    }
+
+    function closeModal() {
+        document.getElementById('modal').style.display = 'none';
+        currentJobId = null;
+    }
+
+    document.getElementById('modal').addEventListener('click', function(e) {
+        if (e.target === this) closeModal();
+    });
+
+    async function retryAllCoverLetters(btn) {
+        const ids = {{ failed_cover_letters | map(attribute='id') | list | tojson }};
+        btn.textContent = 'Retrying…';
+        btn.disabled = true;
+        let succeeded = 0;
+        for (const id of ids) {
+            try {
+                const resp = await fetch('/api/cover-letter/' + id + '/retry', {method: 'POST'});
+                const data = await resp.json();
+                if (data.status === 'ok') succeeded++;
+            } catch (e) {
+                console.error('Retry failed for job', id, e);
+            }
+        }
+        btn.textContent = succeeded + '/' + ids.length + ' queued — reloading…';
+        setTimeout(() => location.reload(), 1500);
+    }
+{% endblock %}

@@ -1,0 +1,32 @@
+# --- Secrets ---
+.env
+
+# --- Runtime data (never commit these) ---
+jobs.db
+seen_jobs.json
+preference_profile.json
+manual_jobs.txt
+processed_jobs.txt
+
+# --- Resume (contains personal information) ---
+resume/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# --- Editor / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Backups ---
+*.bak

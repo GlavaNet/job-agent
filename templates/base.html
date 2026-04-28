@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Job Agent{% endblock %}</title>
+    <style>
+        :root {
+            --bg-primary:       #f0f4f8;
+            --bg-secondary:     #ffffff;
+            --bg-tertiary:      #edf2f7;
+            --bg-hover:         #f7fafc;
+            --text-primary:     #2d3748;
+            --text-secondary:   #4a5568;
+            --text-muted:       #718096;
+            --border:           #e2e8f0;
+            --accent:           #2b6cb0;
+            --accent-light:     #ebf8ff;
+            --accent-hover:     #bee3f8;
+            --score-high-bg:    #c6f6d5;
+            --score-high-text:  #276749;
+            --score-mid-bg:     #fefcbf;
+            --score-mid-text:   #744210;
+            --score-low-bg:     #fed7d7;
+            --score-low-text:   #9b2c2c;
+            --status-default-bg:#e2e8f0;
+            --status-default-fg:#4a5568;
+            --failed-bg:        #fff5f5;
+            --failed-border:    #fc8181;
+            --failed-text:      #c53030;
+            --shadow:           rgba(0,0,0,0.1);
+            --modal-overlay:    rgba(0,0,0,0.5);
+        }
+
+        [data-theme="dark"] {
+            --bg-primary:       #1a202c;
+            --bg-secondary:     #2d3748;
+            --bg-tertiary:      #3a4a5c;
+            --bg-hover:         #354050;
+            --text-primary:     #e2e8f0;
+            --text-secondary:   #cbd5e0;
+            --text-muted:       #a0aec0;
+            --border:           #4a5568;
+            --accent:           #63b3ed;
+            --accent-light:     #2a4365;
+            --accent-hover:     #2c5282;
+            --score-high-bg:    #276749;
+            --score-high-text:  #c6f6d5;
+            --score-mid-bg:     #744210;
+            --score-mid-text:   #fefcbf;
+            --score-low-bg:     #9b2c2c;
+            --score-low-text:   #fed7d7;
+            --status-default-bg:#4a5568;
+            --status-default-fg:#e2e8f0;
+            --failed-bg:        #3d1515;
+            --failed-border:    #9b2c2c;
+            --failed-text:      #fc8181;
+            --shadow:           rgba(0,0,0,0.4);
+            --modal-overlay:    rgba(0,0,0,0.7);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            transition: background 0.2s, color 0.2s;
+        }
+
+        header {
+            background: var(--accent);
+            color: white;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 { font-size: 1.3rem; }
+
+        .theme-toggle {
+            background: none;
+            border: 2px solid rgba(255,255,255,0.5);
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: border-color 0.2s;
+        }
+        .theme-toggle:hover { border-color: white; }
+
+        nav {
+            background: var(--bg-secondary);
+            padding: 10px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 20px;
+        }
+        nav a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            padding: 4px 0;
+        }
+        nav a.active {
+            color: var(--accent);
+            border-bottom: 2px solid var(--accent);
+        }
+
+        .empty {
+            text-align: center;
+            padding: 60px;
+            color: var(--text-muted);
+        }
+
+        a { color: var(--text-secondary); }
+
+        {% block extra_styles %}{% endblock %}
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>{% block header_title %}🤖 Job Agent{% endblock %}</h1>
+    <div style="display:flex; align-items:center; gap:12px;">
+        {% block header_meta %}{% endblock %}
+        <button class="theme-toggle" onclick="toggleTheme()" id="theme-btn">
+            🌙 Dark
+        </button>
+    </div>
+</header>
+
+<nav>
+    <a href="/" {% if active_nav == 'jobs' %}class="active"{% endif %}>Jobs</a>
+    <a href="/companies" {% if active_nav == 'companies' %}class="active"{% endif %}>Company Research</a>
+    <a href="/interview-prep" {% if active_nav == 'prep' %}class="active"{% endif %}>Interview Prep</a>
+    {% if auth_enabled %}
+    <form method="post" action="/logout" style="margin-left:auto;">
+        <button type="submit" style="background:none; border:none; color:var(--text-muted);
+                font-size:0.85rem; cursor:pointer; padding:4px 0;">
+            Sign out
+        </button>
+    </form>
+    {% endif %}
+</nav>
+
+{% block content %}{% endblock %}
+
+<script>
+    const THEME_KEY = 'job-agent-theme';
+
+    function applyTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        const btn = document.getElementById('theme-btn');
+        btn.textContent = theme === 'dark' ? '☀️ Light' : '🌙 Dark';
+        localStorage.setItem(THEME_KEY, theme);
+    }
+
+    function toggleTheme() {
+        const current = document.documentElement.getAttribute('data-theme');
+        applyTheme(current === 'dark' ? 'light' : 'dark');
+    }
+
+    (function () {
+        const saved = localStorage.getItem(THEME_KEY);
+        if (saved) {
+            applyTheme(saved);
+        } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            applyTheme('dark');
+        }
+    })();
+
+    {% block extra_scripts %}{% endblock %}
+</script>
+</body>
+</html>

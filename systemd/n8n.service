@@ -1,0 +1,21 @@
+[Unit]
+Description=n8n Workflow Automation
+After=network.target
+
+[Service]
+User=user
+WorkingDirectory=/home/user
+Environment=PATH=/usr/bin:/usr/local/bin
+Environment=N8N_PORT=5678
+Environment=GENERIC_TIMEZONE=America/Los_Angeles
+Environment=TZ=America/Los_Angeles
+Environment=PYTHONUNBUFFERED=1
+Environment="NODES_EXCLUDE=[]"
+ExecStart=/usr/bin/n8n start
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

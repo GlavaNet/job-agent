@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+
+{% block title %}Interview Prep — Job Agent{% endblock %}
+
+{% block header_title %}🎯 Job Agent — Interview Prep{% endblock %}
+
+{% block header_meta %}
+<span style="font-size:0.85rem; opacity:0.8;">
+    {{ prep_jobs|length }} prep sheet{{ 's' if prep_jobs|length != 1 else '' }}
+</span>
+{% endblock %}
+
+{% block extra_styles %}
+        .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+
+        .prep-card {
+            background: var(--bg-secondary);
+            border-radius: 10px;
+            box-shadow: 0 1px 3px var(--shadow);
+            margin-bottom: 16px;
+            overflow: hidden;
+        }
+        .prep-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            cursor: pointer;
+            border-bottom: 1px solid transparent;
+            transition: background 0.15s;
+        }
+        .prep-header:hover { background: var(--bg-hover); }
+        .prep-header.open { border-bottom-color: var(--border); }
+        .prep-job-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        .prep-job-meta {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 3px;
+        }
+        .prep-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            background: var(--score-high-bg);
+            color: var(--score-high-text);
+        }
+        .prep-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .regen-btn {
+            padding: 5px 14px;
+            background: var(--accent-light);
+            color: var(--accent);
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            white-space: nowrap;
+        }
+        .regen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .prep-body { display: none; padding: 20px; }
+        .prep-body.open { display: block; }
+
+        .prep-sheet-rendered h3 {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--accent);
+            font-weight: 700;
+            margin: 20px 0 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border);
+        }
+        .prep-sheet-rendered h3:first-child { margin-top: 0; }
+        .prep-sheet-rendered p {
+            font-size: 0.9rem;
+            line-height: 1.75;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .no-prep-section { margin-top: 32px; }
+        .no-prep-section h2 {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        .no-prep-card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            box-shadow: 0 1px 2px var(--shadow);
+            padding: 14px 18px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .no-prep-job-info { flex: 1; }
+        .no-prep-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .no-prep-meta {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+{% endblock %}
+
+{% block content %}
+<div class="container">
+
+    {% if prep_jobs %}
+        {% for job in prep_jobs %}
+        <div class="prep-card">
+            <div class="prep-header" onclick="togglePrep('prep-{{ loop.index }}')"
+                 id="prep-header-{{ loop.index }}">
+                <div>
+                    <div class="prep-job-title">{{ job.title }}</div>
+                    <div class="prep-job-meta">
+                        {{ job.company }}
+                        {% if job.location %} · {{ job.location }}{% endif %}
+                        {% if job.date_applied %} · Applied {{ job.date_applied }}{% endif %}
+                    </div>
+                </div>
+                <div class="prep-actions">
+                    <span class="prep-badge">📋 Prep Ready</span>
+                    <button class="regen-btn"
+                            onclick="regenPrep({{ job.id }}, event)"
+                            id="regen-btn-{{ job.id }}">
+                        Regenerate
+                    </button>
+                </div>
+            </div>
+            <div class="prep-body" id="prep-{{ loop.index }}">
+                <div class="prep-sheet-rendered" id="prep-content-{{ job.id }}">
+                    {{ job.interview_prep | prep_to_html | safe }}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="empty">
+            No prep sheets yet.<br><br>
+            Mark a job as <strong>interviewing</strong> in the Jobs tab
+            to automatically generate a prep sheet.
+        </div>
+    {% endif %}
+
+    {% if interviewing_no_prep %}
+    <div class="no-prep-section">
+        <h2>⏳ Prep generating for these jobs…</h2>
+        {% for job in interviewing_no_prep %}
+        <div class="no-prep-card">
+            <div class="no-prep-job-info">
+                <div class="no-prep-title">{{ job.title }}</div>
+                <div class="no-prep-meta">
+                    {{ job.company }}
+                    {% if job.date_applied %} · Applied {{ job.date_applied }}{% endif %}
+                </div>
+            </div>
+            <button class="regen-btn"
+                    onclick="generatePrep({{ job.id }}, event)"
+                    id="regen-btn-{{ job.id }}">
+                Generate Now
+            </button>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+    function togglePrep(id) {
+        const body = document.getElementById(id);
+        body.classList.toggle('open');
+        const headerIdx = id.replace('prep-', '');
+        document.getElementById('prep-header-' + headerIdx).classList.toggle('open');
+    }
+
+    async function regenPrep(jobId, event) {
+        event.stopPropagation();
+        const btn = document.getElementById('regen-btn-' + jobId);
+        btn.textContent = 'Generating…';
+        btn.disabled = true;
+        try {
+            const resp = await fetch('/api/interview-prep/' + jobId + '/generate', {
+                method: 'POST'
+            });
+            const data = await resp.json();
+            if (data.status === 'ok') {
+                btn.textContent = 'Done — reload to view';
+            } else {
+                btn.textContent = 'Error — see logs';
+                btn.disabled = false;
+            }
+        } catch (e) {
+            btn.textContent = 'Error — see logs';
+            btn.disabled = false;
+        }
+    }
+
+    async function generatePrep(jobId, event) {
+        event.stopPropagation();
+        const btn = event.target;
+        btn.textContent = 'Generating…';
+        btn.disabled = true;
+        try {
+            const resp = await fetch('/api/interview-prep/' + jobId + '/generate', {
+                method: 'POST'
+            });
+            const data = await resp.json();
+            if (data.status === 'ok') {
+                btn.textContent = 'Done — reload to view';
+            } else {
+                btn.textContent = 'Error — see logs';
+                btn.disabled = false;
+            }
+        } catch (e) {
+            btn.textContent = 'Error — see logs';
+            btn.disabled = false;
+        }
+    }
+{% endblock %}
