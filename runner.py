@@ -1,19 +1,38 @@
 # runner.py
+import functools
 import logging
+import os
+import pathlib
 import re
 import subprocess
+import sys
 import threading
 
 import requests
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 from logger import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-from models import PipelineSummary
 from config import NTFY_BASE_URL, NTFY_NOTIFICATION_TOPIC
+from models import PipelineSummary
+
+# ---------------------------------------------------------------------------
+# Paths — derived from this file's location so the runner works regardless
+# of which user or directory it is launched from.  No hardcoded paths.
+# ---------------------------------------------------------------------------
+
+BASE_DIR = pathlib.Path(__file__).parent.resolve()
+PYTHON   = sys.executable   # same interpreter / venv that is running runner.py
+
+# ---------------------------------------------------------------------------
+# Runner config
+# ---------------------------------------------------------------------------
+
+RUNNER_SECRET: str | None = os.getenv("RUNNER_SECRET") or None
+RUNNER_PORT:   int        = int(os.getenv("RUNNER_PORT", "8888"))
 
 app = Flask(__name__)
 
@@ -22,7 +41,28 @@ _process_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
-# ANSI colour helpers (visible when tailing with --output=cat)
+# Token auth
+#
+# When RUNNER_SECRET is set every mutating endpoint (/run, /stop,
+# /run/reprocess-manual) requires:
+#   Authorization: Bearer <RUNNER_SECRET>
+# Read-only endpoints (/status) are always open.
+# ---------------------------------------------------------------------------
+
+def _require_token(f):
+    """Decorator that enforces Bearer-token auth when RUNNER_SECRET is set."""
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        if RUNNER_SECRET:
+            auth = request.headers.get("Authorization", "")
+            if not auth.startswith("Bearer ") or auth[7:] != RUNNER_SECRET:
+                return jsonify({"error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ---------------------------------------------------------------------------
+# ANSI colour helpers (visible when tailing the journal with --output=cat)
 # ---------------------------------------------------------------------------
 
 class _C:
@@ -86,7 +126,7 @@ def _colorize(line: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Internal helpers
 # ---------------------------------------------------------------------------
 
 def _is_running() -> bool:
@@ -111,9 +151,9 @@ def _send_notification(
             f"{NTFY_BASE_URL}/{NTFY_NOTIFICATION_TOPIC}",
             data=message.encode("utf-8"),
             headers={
-                "Title": _header_safe(title),
+                "Title":    _header_safe(title),
                 "Priority": priority,
-                "Tags": ",".join(tags) if tags else "",
+                "Tags":     ",".join(tags) if tags else "",
             },
             timeout=5,
         ).raise_for_status()
@@ -159,16 +199,16 @@ def _parse_pipeline_summary(output: str) -> PipelineSummary:
 
         m = re.search(r'\[Validator\] (\d+) passed, (\d+) disqualified', line)
         if m:
-            summary["validated"] = int(m.group(1))
+            summary["validated"]    = int(m.group(1))
             summary["disqualified"] = int(m.group(2))
 
         m = re.search(r'\[(\d+)/10\] (.+?) @ (.+?) \((.+?)\)', line)
         if m and len(summary["top_jobs"]) < 5:
             summary["top_jobs"].append({
-                "score": int(m.group(1)),
-                "title": m.group(2).strip(),
+                "score":   int(m.group(1)),
+                "title":   m.group(2).strip(),
                 "company": m.group(3).strip(),
-                "source": m.group(4).strip(),
+                "source":  m.group(4).strip(),
             })
 
         m = re.search(r'Fetching jobs from (\w+)', line)
@@ -190,14 +230,14 @@ def _build_notification(summary: PipelineSummary) -> tuple[str, str, str]:
     total_new = summary["matched"] + summary["manual_processed"]
 
     if total_new == 0:
-        title = "Job Agent — no new matches today"
+        title    = "Job Agent — no new matches today"
         priority = "low"
     elif total_new >= 5:
-        title = f"Job Agent — {total_new} new matches found"
+        title    = f"Job Agent — {total_new} new matches found"
         priority = "high"
     else:
-        plural = "es" if total_new > 1 else ""
-        title = f"Job Agent — {total_new} new match{plural} found"
+        plural   = "es" if total_new > 1 else ""
+        title    = f"Job Agent — {total_new} new match{plural} found"
         priority = "default"
 
     lines: list[str] = []
@@ -243,7 +283,10 @@ def _build_notification(summary: PipelineSummary) -> tuple[str, str, str]:
 # ---------------------------------------------------------------------------
 
 def _run_pipeline() -> None:
-    """Execute job_agent.py as a subprocess and send a completion notification."""
+    """
+    Launch job_agent.py as a subprocess using the same Python interpreter
+    and working directory as this runner, then send a completion notification.
+    """
     global _current_process
     output_lines: list[str] = []
 
@@ -251,8 +294,8 @@ def _run_pipeline() -> None:
         logger.info("[Runner] Starting job agent pipeline…")
         with _process_lock:
             _current_process = subprocess.Popen(
-                ["/home/user/job-agent/venv/bin/python", "job_agent.py"],
-                cwd="/home/user/job-agent",
+                [str(PYTHON), str(BASE_DIR / "job_agent.py")],
+                cwd=str(BASE_DIR),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -325,10 +368,11 @@ def _run_pipeline() -> None:
 # ---------------------------------------------------------------------------
 
 @app.route("/run", methods=["POST"])
+@_require_token
 def trigger_run():
     if _is_running():
         return jsonify({
-            "status": "busy",
+            "status":  "busy",
             "message": "Pipeline already running — wait or call /stop first",
         }), 409
     threading.Thread(target=_run_pipeline, daemon=True).start()
@@ -336,6 +380,7 @@ def trigger_run():
 
 
 @app.route("/stop", methods=["POST"])
+@_require_token
 def stop_run():
     global _current_process
     with _process_lock:
@@ -347,15 +392,19 @@ def stop_run():
 
 
 @app.route("/run/reprocess-manual", methods=["POST"])
+@_require_token
 def trigger_reprocess_manual():
     if _is_running():
         return jsonify({"status": "busy", "message": "Pipeline already running"}), 409
 
     def _reprocess():
-        import os
+        # Import here so the module resolves paths relative to BASE_DIR,
+        # not the runner's cwd.  No os.chdir() needed.
+        import sys as _sys
+        if str(BASE_DIR) not in _sys.path:
+            _sys.path.insert(0, str(BASE_DIR))
         from manual_job_scraper import run as run_manual
-        os.chdir("/home/user/job-agent")
-        run_manual("manual_jobs.txt", reprocess=True)
+        run_manual(str(BASE_DIR / "manual_jobs.txt"), reprocess=True)
 
     threading.Thread(target=_reprocess, daemon=True).start()
     return jsonify({"status": "started", "message": "Manual reprocessing started"}), 200
@@ -364,7 +413,7 @@ def trigger_reprocess_manual():
 @app.route("/status", methods=["GET"])
 def status():
     running = _is_running()
-    pid = _current_process.pid if running and _current_process else None
+    pid     = _current_process.pid if running and _current_process else None
     return jsonify({"status": "busy" if running else "idle", "running": running, "pid": pid})
 
 
@@ -373,5 +422,5 @@ def status():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    logger.info("[Runner] Starting on http://0.0.0.0:8888")
-    app.run(host="0.0.0.0", port=8888, debug=False)
+    logger.info("[Runner] Starting on http://0.0.0.0:%d", RUNNER_PORT)
+    app.run(host="0.0.0.0", port=RUNNER_PORT, debug=False)
