@@ -15,6 +15,12 @@ Token optimisations vs original:
   line-by-line heading parser with a single json.loads() call.
 - Per-query snippet length is capped at 500 chars to prevent one
   verbose result from crowding out the rest.
+
+Can also be run directly from the command line:
+
+    python3 company_researcher.py --company "Stripe"
+    python3 company_researcher.py --job-id 42
+    python3 company_researcher.py --company "Stripe" --force
 """
 import json
 import logging
@@ -412,3 +418,33 @@ def research_and_generate_cover_letter(job_id: int) -> None:
 
     finally:
         timer.cancel()
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    parser = argparse.ArgumentParser(
+        description="Manually research a company and store results in the database."
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--company", help="Company name to research")
+    group.add_argument("--job-id", type=int, help="Research the company for a specific job ID")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-research even if the company has already been researched",
+    )
+    args = parser.parse_args()
+
+    if args.company:
+        did_run = research_company(args.company, force=args.force)
+        sys.exit(0 if did_run else 1)
+    else:
+        research_companies_for_job(args.job_id, force=args.force)

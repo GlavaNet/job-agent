@@ -1,9 +1,8 @@
 # job_fetcher.py
-import asyncio
+import json
 import logging
 import re
 import socket
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable
@@ -33,8 +32,8 @@ logger = logging.getLogger(__name__)
 # Connectivity pre-flight
 # ---------------------------------------------------------------------------
 
-_CONNECTIVITY_PROBE_HOST = "8.8.8.8"
-_CONNECTIVITY_PROBE_PORT = 53
+_CONNECTIVITY_PROBE_HOST    = "8.8.8.8"
+_CONNECTIVITY_PROBE_PORT    = 53
 _CONNECTIVITY_PROBE_TIMEOUT = 3
 
 
@@ -69,12 +68,8 @@ class FetchResult:
     source: str
     status: FetchStatus
     jobs: list[Job] = field(default_factory=list)
-    # Human-readable detail logged and surfaced in the pipeline summary
     detail: str = ""
-    # Raw HTTP status code when applicable
     http_status: int | None = None
-
-    # Convenience -----------------------------------------------------------
 
     @property
     def ok(self) -> bool:
@@ -107,11 +102,11 @@ class FetchResult:
 # ---------------------------------------------------------------------------
 
 _HTML_ENTITY_MAP = {
-    "&amp;": "&",
-    "&lt;": "<",
-    "&gt;": ">",
+    "&amp;":  "&",
+    "&lt;":   "<",
+    "&gt;":   ">",
     "&nbsp;": " ",
-    "&#39;": "'",
+    "&#39;":  "'",
     "&quot;": '"',
 }
 
@@ -127,7 +122,7 @@ def strip_html(text: str) -> str:
 def keyword_match(text: str, keywords: list[str]) -> bool:
     """
     Return True if any keyword phrase, or any individual word longer than
-    4 characters from a multi-word phrase, appears in text.
+    4 characters from a multi-word phrase, appears in text (case-insensitive).
     The word-level fallback prevents long phrases from never matching.
     """
     text_lower = text.lower()
@@ -168,9 +163,7 @@ def _safe_get(
         return resp, None
 
     except requests.exceptions.ConnectionError as exc:
-        # Could be DNS failure, refused connection, or mid-request drop.
         detail = f"Connection failed: {exc}"
-        # Distinguish a full loss of internet from a per-host refusal.
         if not check_internet():
             return None, FetchResult(source, FetchStatus.NO_NETWORK, detail="No internet connectivity")
         return None, FetchResult(source, FetchStatus.ERROR, detail=detail)
@@ -197,7 +190,10 @@ def _safe_get(
         return None, FetchResult(source, FetchStatus.ERROR, detail=str(exc))
 
 
-def _parse_json(resp: requests.Response, source: str) -> tuple[dict | list | None, FetchResult | None]:
+def _parse_json(
+    resp: requests.Response,
+    source: str,
+) -> tuple[dict | list | None, FetchResult | None]:
     """Parse JSON from a response; return (data, None) or (None, FetchResult)."""
     try:
         return resp.json(), None
@@ -234,17 +230,17 @@ def fetch_remotive_jobs() -> FetchResult:
     for job in data["jobs"]:
         if not isinstance(job, dict):
             continue
-        title = job.get("title", "")
+        title       = job.get("title", "")
         description = strip_html(job.get("description", ""))
         if keyword_match(title + " " + description, REMOTIVE_KEYWORDS):
             jobs.append({
-                "source": source,
-                "title": title,
-                "company": job.get("company_name", "Unknown"),
-                "location": "Remote — " + job.get("candidate_required_location", "Worldwide"),
-                "url": job.get("url", ""),
+                "source":      source,
+                "title":       title,
+                "company":     job.get("company_name", "Unknown"),
+                "location":    "Remote — " + job.get("candidate_required_location", "Worldwide"),
+                "url":         job.get("url", ""),
                 "description": description[:1000],
-                "salary": job.get("salary") or "Not specified",
+                "salary":      job.get("salary") or "Not specified",
             })
 
     if not jobs:
@@ -273,13 +269,13 @@ def fetch_remoteok_jobs() -> FetchResult:
 
     jobs: list[Job] = [
         {
-            "source": source,
-            "title": job.get("position", ""),
-            "company": job.get("company", "Unknown"),
-            "location": "Remote",
-            "url": job.get("url", ""),
+            "source":      source,
+            "title":       job.get("position", ""),
+            "company":     job.get("company", "Unknown"),
+            "location":    "Remote",
+            "url":         job.get("url", ""),
             "description": strip_html(job.get("description", ""))[:1000],
-            "salary": "Not specified",
+            "salary":      "Not specified",
         }
         for job in listings[:MAX_JOBS_PER_SOURCE]
     ]
@@ -288,8 +284,8 @@ def fetch_remoteok_jobs() -> FetchResult:
 
 def fetch_muse_jobs() -> FetchResult:
     """Fetch tech jobs from The Muse's public API."""
-    source = "The Muse"
-    jobs: list[Job] = []
+    source   = "The Muse"
+    jobs: list[Job]    = []
     last_err: FetchResult | None = None
 
     for keyword in SEARCH_KEYWORDS:
@@ -300,7 +296,6 @@ def fetch_muse_jobs() -> FetchResult:
         )
         if err:
             last_err = err
-            # Stop immediately on connectivity / auth failures
             if err.status in (FetchStatus.NO_NETWORK, FetchStatus.AUTH_ERROR):
                 return err
             continue
@@ -318,7 +313,7 @@ def fetch_muse_jobs() -> FetchResult:
             if not isinstance(job, dict):
                 continue
 
-            title = job.get("name", "")
+            title    = job.get("name", "")
             contents = job.get("contents", "")
             if isinstance(contents, str):
                 description = strip_html(contents)
@@ -332,25 +327,25 @@ def fetch_muse_jobs() -> FetchResult:
             if not keyword_match(title + " " + description, [keyword]):
                 continue
 
-            locations = job.get("locations", [])
-            location = (
+            locations    = job.get("locations", [])
+            location     = (
                 locations[0].get("name", "Not specified")
                 if locations and isinstance(locations[0], dict)
                 else "Not specified"
             )
             company_data = job.get("company", {})
-            company = company_data.get("name", "Unknown") if isinstance(company_data, dict) else "Unknown"
-            refs = job.get("refs", {})
-            job_url = refs.get("landing_page", "") if isinstance(refs, dict) else ""
+            company      = company_data.get("name", "Unknown") if isinstance(company_data, dict) else "Unknown"
+            refs         = job.get("refs", {})
+            job_url      = refs.get("landing_page", "") if isinstance(refs, dict) else ""
 
             jobs.append({
-                "source": source,
-                "title": title,
-                "company": company,
-                "location": location,
-                "url": job_url,
+                "source":      source,
+                "title":       title,
+                "company":     company,
+                "location":    location,
+                "url":         job_url,
                 "description": description[:1000],
-                "salary": "Not specified",
+                "salary":      "Not specified",
             })
 
     if not jobs:
@@ -385,17 +380,17 @@ def fetch_jobicy_jobs() -> FetchResult:
     for job in data["jobs"]:
         if not isinstance(job, dict):
             continue
-        title = job.get("jobTitle", "")
+        title       = job.get("jobTitle", "")
         description = strip_html(job.get("jobDescription", ""))
         if keyword_match(title + " " + description, SEARCH_KEYWORDS):
             jobs.append({
-                "source": source,
-                "title": title,
-                "company": job.get("companyName", "Unknown"),
-                "location": "Remote — " + job.get("jobGeo", "Worldwide"),
-                "url": job.get("url", ""),
+                "source":      source,
+                "title":       title,
+                "company":     job.get("companyName", "Unknown"),
+                "location":    "Remote — " + job.get("jobGeo", "Worldwide"),
+                "url":         job.get("url", ""),
                 "description": description[:1000],
-                "salary": "Not specified",
+                "salary":      "Not specified",
             })
 
     if not jobs:
@@ -406,18 +401,18 @@ def fetch_jobicy_jobs() -> FetchResult:
 
 def fetch_adzuna_jobs() -> FetchResult:
     """Fetch US jobs from Adzuna's API for each configured keyword."""
-    source = "Adzuna"
-    jobs: list[Job] = []
+    source   = "Adzuna"
+    jobs: list[Job]    = []
     last_err: FetchResult | None = None
 
     for keyword in ADZUNA_KEYWORDS:
         params: dict = {
-            "app_id": ADZUNA_APP_ID,
-            "app_key": ADZUNA_API_KEY,
+            "app_id":           ADZUNA_APP_ID,
+            "app_key":          ADZUNA_API_KEY,
             "results_per_page": MAX_JOBS_PER_SOURCE,
-            "what": keyword,
-            "sort_by": ADZUNA_SORT_BY,
-            "content-type": "application/json",
+            "what":             keyword,
+            "sort_by":          ADZUNA_SORT_BY,
+            "content-type":     "application/json",
         }
         if ADZUNA_DISTANCE_MILES:
             params["distance"] = ADZUNA_DISTANCE_MILES
@@ -448,7 +443,7 @@ def fetch_adzuna_jobs() -> FetchResult:
             if not isinstance(job, dict):
                 continue
             location_data = job.get("location", {})
-            area = location_data.get("area", [])
+            area          = location_data.get("area", [])
             if len(area) >= 2:
                 location = f"{area[-1]}, {area[1]}"
             elif len(area) == 1:
@@ -466,13 +461,13 @@ def fetch_adzuna_jobs() -> FetchResult:
                 salary = "Not specified"
 
             jobs.append({
-                "source": source,
-                "title": job.get("title", ""),
-                "company": job.get("company", {}).get("display_name", "Unknown"),
-                "location": location,
-                "url": job.get("redirect_url", ""),
+                "source":      source,
+                "title":       job.get("title", ""),
+                "company":     job.get("company", {}).get("display_name", "Unknown"),
+                "location":    location,
+                "url":         job.get("redirect_url", ""),
                 "description": job.get("description", "")[:1000],
-                "salary": salary,
+                "salary":      salary,
             })
 
     if not jobs:
@@ -484,7 +479,7 @@ def fetch_adzuna_jobs() -> FetchResult:
 
 
 # ---------------------------------------------------------------------------
-# NEW SOURCE: Findwork
+# SOURCE: Findwork
 # ---------------------------------------------------------------------------
 
 def fetch_findwork_jobs() -> FetchResult:
@@ -500,19 +495,16 @@ def fetch_findwork_jobs() -> FetchResult:
             detail="FINDWORK_API_KEY not set in .env — register free at findwork.dev",
         )
 
-    jobs: list[Job] = []
+    jobs: list[Job]    = []
     last_err: FetchResult | None = None
 
-    for keyword in SEARCH_KEYWORDS[:6]:  # limit keyword iterations for this source
+    for keyword in SEARCH_KEYWORDS[:6]:
         resp, err = _safe_get(
             "https://findwork.dev/api/jobs/",
             source,
             params={
                 "search": keyword,
                 "remote": "true",
-                # Note: Findwork does not accept ISO country codes in the location
-                # param. Omitting it returns global results; remote=true is the
-                # effective US filter since the site is US-centric.
             },
             headers={"Authorization": f"Token {FINDWORK_API_KEY}"},
         )
@@ -534,27 +526,26 @@ def fetch_findwork_jobs() -> FetchResult:
         for job in data["results"]:
             if not isinstance(job, dict):
                 continue
-            # Guard every field against None values (API returns null for missing data)
-            title       = job.get("role") or ""
-            company     = job.get("company_name") or "Unknown"
-            location    = job.get("location") or "Remote"
-            url         = job.get("url") or ""
-            text        = job.get("text") or ""
+            title         = job.get("role") or ""
+            company       = job.get("company_name") or "Unknown"
+            location      = job.get("location") or "Remote"
+            url           = job.get("url") or ""
+            text          = job.get("text") or ""
             keywords_list = job.get("keywords") or []
-            description = " ".join(keywords_list) if isinstance(keywords_list, list) else ""
-            full_text   = title + " " + description + " " + text
+            description   = " ".join(keywords_list) if isinstance(keywords_list, list) else ""
+            full_text     = title + " " + description + " " + text
 
             if not keyword_match(full_text, [keyword]):
                 continue
 
             jobs.append({
-                "source": source,
-                "title": title,
-                "company": company,
-                "location": location,
-                "url": url,
+                "source":      source,
+                "title":       title,
+                "company":     company,
+                "location":    location,
+                "url":         url,
                 "description": strip_html(text)[:1000] if text else description[:1000],
-                "salary": "Not specified",
+                "salary":      "Not specified",
             })
 
     if not jobs:
@@ -565,383 +556,6 @@ def fetch_findwork_jobs() -> FetchResult:
     return FetchResult(source, FetchStatus.OK, jobs=jobs[:MAX_JOBS_PER_SOURCE])
 
 
-
-# ---------------------------------------------------------------------------
-# NEW SOURCE: Greenhouse (ATS job board — public API, no auth required)
-# ---------------------------------------------------------------------------
-
-# Greenhouse hosts job boards for hundreds of tech companies.
-# Their board API is fully public for GET requests — no key needed.
-# We query a curated list of IT/security-focused employers that post
-# on Greenhouse and are known to hire remote US workers.
-
-from search_profile import GREENHOUSE_BOARDS as _GREENHOUSE_BOARDS
-
-_GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
-
-
-def fetch_greenhouse_jobs() -> FetchResult:
-    """
-    Fetch US remote IT/security jobs from Greenhouse-hosted job boards.
-    Greenhouse's board API is fully public — no authentication required.
-    Queries a curated list of tech/security employers and filters for
-    remote US roles matching the configured search keywords.
-    """
-    source = "Greenhouse"
-    jobs: list[Job] = []
-    seen_urls: set[str] = set()
-    last_err: FetchResult | None = None
-
-    for board in _GREENHOUSE_BOARDS:
-        resp, err = _safe_get(
-            _GREENHOUSE_API.format(board=board),
-            source,
-            params={"content": "true"},   # includes full job description
-        )
-        if err:
-            # Individual board failures are non-fatal — log and continue
-            if err.status in (FetchStatus.NO_NETWORK,):
-                return err
-            if err.status != FetchStatus.HTTP_ERROR or (err.http_status or 0) not in (404, 410):
-                last_err = err
-                logger.debug("[%s] Board '%s': %s", source, board, err.detail)
-            continue
-
-        data, err = _parse_json(resp, source)
-        if err or not isinstance(data, dict):
-            last_err = err or FetchResult(source, FetchStatus.PARSE_ERROR, detail=f"Bad response from board '{board}'")
-            continue
-
-        for job in data.get("jobs", []):
-            if not isinstance(job, dict):
-                continue
-
-            title = job.get("title") or ""
-            description = strip_html(job.get("content") or "")
-
-            # Filter by keyword match
-            if not keyword_match(title + " " + description, SEARCH_KEYWORDS):
-                continue
-
-            # Location filtering — require US or remote
-            loc_data = job.get("location", {})
-            raw_location = (loc_data.get("name") or "") if isinstance(loc_data, dict) else ""
-            loc_lower = raw_location.lower()
-            is_us_eligible = (
-                not raw_location  # blank = check job metadata
-                or "remote" in loc_lower
-                or "united states" in loc_lower
-                or ", us" in loc_lower
-                or loc_lower.endswith(" us")
-                or any(s in loc_lower for s in (
-                    "new york", "san francisco", "austin", "seattle",
-                    "boston", "chicago", "denver", "atlanta", "raleigh",
-                ))
-            )
-            if not is_us_eligible:
-                continue
-
-            url = job.get("absolute_url") or ""
-            if not url or url in seen_urls:
-                continue
-
-            # Check metadata for remote indicator
-            metadata = job.get("metadata") or []
-            is_remote = any(
-                isinstance(m, dict) and "remote" in str(m.get("value") or "").lower()
-                for m in metadata
-            )
-            location = ("Remote — United States" if is_remote
-                       else raw_location or "United States")
-
-            seen_urls.add(url)
-            jobs.append({
-                "source": source,
-                "title": title,
-                "company": board.replace("-", " ").title(),
-                "location": location,
-                "url": url,
-                "description": description[:1000],
-                "salary": "Not specified",
-            })
-
-    if not jobs:
-        status = last_err.status if last_err else FetchStatus.EMPTY
-        detail = last_err.detail if last_err else "No matching remote US jobs found across boards"
-        return FetchResult(source, status, detail=detail)
-
-    return FetchResult(source, FetchStatus.OK, jobs=jobs[:MAX_JOBS_PER_SOURCE])
-
-
-# ---------------------------------------------------------------------------
-# NEW SOURCE: USAJobs (US federal government jobs — official public API)
-# ---------------------------------------------------------------------------
-
-# USAJobs requires a registered email and API key as request headers.
-# Both are free: https://developer.usajobs.gov/apirequest/
-# Set in .env: USAJOBS_API_KEY and USAJOBS_EMAIL
-# If not set, this source is skipped gracefully.
-
-_USAJOBS_API_URL = "https://data.usajobs.gov/api/Search"
-
-
-def fetch_usajobs_jobs() -> FetchResult:
-    """
-    Fetch US federal IT/security jobs from USAJobs (data.usajobs.gov).
-    Free public API — requires a registered API key and email in .env.
-    Focuses on IT, cybersecurity, network, and systems roles.
-    """
-    from config import USAJOBS_API_KEY, USAJOBS_EMAIL  # imported lazily to keep config changes optional
-    source = "USAJobs"
-
-    if not USAJOBS_API_KEY or not USAJOBS_EMAIL:
-        return FetchResult(
-            source, FetchStatus.AUTH_ERROR,
-            detail="USAJOBS_API_KEY or USAJOBS_EMAIL not set — register free at developer.usajobs.gov",
-        )
-
-    jobs: list[Job] = []
-    seen_urls: set[str] = set()
-    last_err: FetchResult | None = None
-
-    for keyword in SEARCH_KEYWORDS[:6]:
-        resp, err = _safe_get(
-            _USAJOBS_API_URL,
-            source,
-            params={
-                "Keyword": keyword,
-                "LocationName": "Remote",
-                "RemoteIndicator": "True",
-                "ResultsPerPage": str(MAX_JOBS_PER_SOURCE),
-                "SortField": "OpenDate",
-                "SortDirection": "Desc",
-                "Fields": "Min",
-            },
-            headers={
-                "Host": "data.usajobs.gov",
-                "User-Agent": USAJOBS_EMAIL,
-                "Authorization-Key": USAJOBS_API_KEY,
-            },
-        )
-        if err:
-            last_err = err
-            if err.status in (FetchStatus.NO_NETWORK, FetchStatus.AUTH_ERROR):
-                return err
-            continue
-
-        data, err = _parse_json(resp, source)
-        if err:
-            last_err = err
-            continue
-
-        if not isinstance(data, dict):
-            last_err = FetchResult(source, FetchStatus.PARSE_ERROR, detail="Unexpected root type")
-            continue
-
-        search_result = data.get("SearchResult", {})
-        items = search_result.get("SearchResultItems", [])
-
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            matched = item.get("MatchedObjectDescriptor", {})
-            if not isinstance(matched, dict):
-                continue
-
-            title       = matched.get("PositionTitle", "")
-            org         = matched.get("OrganizationName", "Unknown")
-            url         = matched.get("PositionURI", "")
-            apply_uri   = matched.get("ApplyURI", [""])[0] if matched.get("ApplyURI") else url
-
-            locations   = matched.get("PositionLocation", [])
-            if locations and isinstance(locations[0], dict):
-                loc = locations[0]
-                city  = loc.get("CityName", "")
-                state = loc.get("CountrySubDivisionCode", "")
-                location = f"{city}, {state}".strip(", ") or "United States"
-            else:
-                location = "United States"
-
-            remuneration = matched.get("PositionRemuneration", [{}])
-            sal = remuneration[0] if remuneration else {}
-            sal_min = sal.get("MinimumRange", "")
-            sal_max = sal.get("MaximumRange", "")
-            if sal_min and sal_max:
-                try:
-                    salary = f"${int(float(sal_min)):,} – ${int(float(sal_max)):,}"
-                except ValueError:
-                    salary = f"{sal_min} – {sal_max}"
-            else:
-                salary = "Not specified"
-
-            qual = matched.get("QualificationSummary", "") or ""
-            description = strip_html(qual)[:1000]
-
-            if not apply_uri or apply_uri in seen_urls:
-                continue
-
-            seen_urls.add(apply_uri)
-            jobs.append({
-                "source": source,
-                "title": title,
-                "company": org,
-                "location": location,
-                "url": apply_uri,
-                "description": description,
-                "salary": salary,
-            })
-
-    if not jobs:
-        status = last_err.status if last_err else FetchStatus.EMPTY
-        detail = last_err.detail if last_err else "No matching federal jobs found"
-        return FetchResult(source, status, detail=detail)
-
-    return FetchResult(source, FetchStatus.OK, jobs=jobs[:MAX_JOBS_PER_SOURCE])
-
-
-# ---------------------------------------------------------------------------
-# SOURCE: Dice (Playwright headless — React-rendered search results)
-# ---------------------------------------------------------------------------
-
-# Dice's search results are fully React-rendered — plain HTTP requests get
-# an empty shell.  The pipeline already has Playwright installed via Scrapling
-# for job validation and manual URL scraping, so we reuse the same
-# DynamicFetcher here.  google_search=True spoofs a Google referrer, which
-# bypasses Dice's light Cloudflare protection.
-
-_DICE_SEARCH_URL = "https://www.dice.com/jobs"
-_DICE_BOT_INDICATORS = ["just a moment", "verifying you are human", "checking your browser"]
-
-
-async def _fetch_dice_keyword_async(keyword: str, seen_urls: set[str]) -> list[Job]:
-    """
-    Fetch one page of Dice search results for a single keyword using Playwright.
-    Returns a list of Job dicts.
-    """
-    from scrapling.fetchers import DynamicFetcher
-
-    url = (
-        f"{_DICE_SEARCH_URL}?q={keyword.replace(' ', '+')}"
-        f"&filters.workplaceTypes=Remote&countryCode=US&language=en"
-    )
-
-    try:
-        page = await DynamicFetcher.async_fetch(
-            url,
-            headless=True,
-            network_idle=True,
-            wait=4000,          # extra wait for React hydration
-            disable_resources=True,
-            google_search=True,
-        )
-    except Exception as exc:
-        logger.warning("[Dice] Playwright fetch failed for '%s': %s", keyword, exc)
-        return []
-
-    html = str(page.html_content or "")
-
-    if any(ind in html.lower() for ind in _DICE_BOT_INDICATORS):
-        logger.warning("[Dice] Bot protection triggered for keyword '%s'", keyword)
-        return []
-
-    jobs: list[Job] = []
-
-    # Dice renders job cards with data-cy="card" and inner elements with
-    # data-cy="card-title-link".  Extract via regex against the rendered HTML.
-    # Pattern targets the anchor that wraps the job title inside each card.
-    card_pat = re.compile(
-        r'<a[^>]+data-cy="card-title-link"[^>]+href="([^"]+)"[^>]*>\s*([^<]{3,150})',
-        re.IGNORECASE,
-    )
-    company_pat = re.compile(
-        r'data-cy="search-result-company-name"[^>]*>\s*([^<]{2,100})',
-        re.IGNORECASE,
-    )
-    location_pat = re.compile(
-        r'data-cy="search-result-location"[^>]*>\s*([^<]{2,100})',
-        re.IGNORECASE,
-    )
-    salary_pat = re.compile(
-        r'data-cy="search-result-salary"[^>]*>\s*([^<]{2,80})',
-        re.IGNORECASE,
-    )
-
-    companies = [m.group(1).strip() for m in company_pat.finditer(html)]
-    locations = [m.group(1).strip() for m in location_pat.finditer(html)]
-    salaries  = [m.group(1).strip() for m in salary_pat.finditer(html)]
-
-    for i, m in enumerate(card_pat.finditer(html)):
-        href  = m.group(1).strip()
-        title = strip_html(m.group(2)).strip()
-
-        if not title or not href:
-            continue
-
-        # Dice card URLs may be relative or absolute
-        job_url = href if href.startswith("http") else f"https://www.dice.com{href}"
-        if job_url in seen_urls:
-            continue
-
-        company  = companies[i] if i < len(companies) else "Unknown"
-        location = locations[i] if i < len(locations) else "Remote — United States"
-        salary   = salaries[i]  if i < len(salaries)  else "Not specified"
-
-        seen_urls.add(job_url)
-        jobs.append({
-            "source": "Dice",
-            "title": title,
-            "company": company,
-            "location": location,
-            "url": job_url,
-            "description": "",  # full description fetched by job_validator downstream
-            "salary": salary,
-        })
-
-    logger.debug("[Dice] '%s' → %d card(s) parsed", keyword, len(jobs))
-    return jobs
-
-
-def fetch_dice_jobs() -> FetchResult:
-    """
-    Fetch remote US tech jobs from Dice using Playwright (headless Chromium).
-    Dice's search results are React-rendered and cannot be fetched with plain
-    HTTP — this reuses the DynamicFetcher already installed for job validation.
-    """
-    source = "Dice"
-
-    async def _run_all() -> list[Job]:
-        jobs: list[Job] = []
-        seen_urls: set[str] = set()
-        for keyword in SEARCH_KEYWORDS[:5]:  # limit to 5 keywords; Playwright is slower
-            batch = await _fetch_dice_keyword_async(keyword, seen_urls)
-            jobs.extend(batch)
-            if len(jobs) >= MAX_JOBS_PER_SOURCE:
-                break
-        return jobs[:MAX_JOBS_PER_SOURCE]
-
-    try:
-        jobs = asyncio.run(_run_all())
-    except Exception as exc:
-        return FetchResult(
-            source, FetchStatus.ERROR,
-            detail=f"Playwright runner failed: {exc}",
-        )
-
-    if not jobs:
-        return FetchResult(
-            source, FetchStatus.EMPTY,
-            detail="No job cards found — Dice HTML structure may have changed",
-        )
-
-    return FetchResult(source, FetchStatus.OK, jobs=jobs)
-
-
-# ---------------------------------------------------------------------------
-# Aggregator
-# ---------------------------------------------------------------------------
-
-#: All registered fetchers as (display_name, callable) pairs.
-#: Add new sources here — no other changes required.
 # ---------------------------------------------------------------------------
 # SOURCE: Himalayas (free public JSON API — no auth required)
 # ---------------------------------------------------------------------------
@@ -956,9 +570,9 @@ def fetch_himalayas_jobs() -> FetchResult:
     one request per configured keyword, with page 1 only to respect rate limits.
     Full API docs: https://himalayas.app/docs/remote-jobs-api
     """
-    source = "Himalayas"
-    jobs: list[Job] = []
-    seen_urls: set[str] = set()
+    source    = "Himalayas"
+    jobs: list[Job]     = []
+    seen_urls: set[str]  = set()
     last_err: FetchResult | None = None
 
     for keyword in SEARCH_KEYWORDS[:6]:
@@ -966,11 +580,11 @@ def fetch_himalayas_jobs() -> FetchResult:
             _HIMALAYAS_SEARCH_URL,
             source,
             params={
-                "q": keyword,
-                "country": "United States",
+                "q":               keyword,
+                "country":         "United States",
                 "employment_type": "Full Time",
-                "sort": "recent",
-                "page": "1",
+                "sort":            "recent",
+                "page":            "1",
             },
         )
         if err:
@@ -998,23 +612,37 @@ def fetch_himalayas_jobs() -> FetchResult:
             title       = job.get("title") or ""
             description = strip_html(job.get("description") or "")
 
-            # locationRestrictions is an array of objects: {"alpha2": "US", "name": "United States", ...}
-            # Empty array = worldwide (US-eligible). Non-empty must contain US.
+            # locationRestrictions may be either:
+            #   - a list of strings: ["United States", "Canada"]  (current API format)
+            #   - a list of objects: [{"alpha2": "US", "name": "United States"}]  (legacy)
+            # Empty list = worldwide remote (US-eligible).
             loc_restrictions = job.get("locationRestrictions") or []
             if loc_restrictions:
-                country_codes = {
-                    (r.get("alpha2") or "").upper()
-                    for r in loc_restrictions if isinstance(r, dict)
-                }
-                if "US" not in country_codes:
+                us_eligible = False
+                for r in loc_restrictions:
+                    if isinstance(r, str):
+                        low = r.lower()
+                        if "united states" in low or low in ("us", "usa"):
+                            us_eligible = True
+                            break
+                    elif isinstance(r, dict):
+                        if (r.get("alpha2") or "").upper() == "US":
+                            us_eligible = True
+                            break
+                        if "united states" in (r.get("name") or "").lower():
+                            us_eligible = True
+                            break
+                if not us_eligible:
                     continue
 
             url = job.get("applicationLink") or job.get("url") or ""
             if not url or url in seen_urls:
                 continue
 
-            company = job.get("companyName") or "Unknown"
+            if not keyword_match(title + " " + description, SEARCH_KEYWORDS):
+                continue
 
+            company    = job.get("companyName") or "Unknown"
             salary_min = job.get("minSalary")
             salary_max = job.get("maxSalary")
             currency   = job.get("currency") or "USD"
@@ -1025,8 +653,16 @@ def fetch_himalayas_jobs() -> FetchResult:
             else:
                 salary = "Not specified"
 
+            # Build location display string.
+            # Prefer restriction names, falling back to timezone hints.
             tz_restrictions = job.get("timezoneRestrictions") or []
-            restriction_names = [r.get("name") for r in loc_restrictions if isinstance(r, dict) and r.get("name")]
+            restriction_names: list[str] = []
+            for r in loc_restrictions:
+                if isinstance(r, str) and r:
+                    restriction_names.append(r)
+                elif isinstance(r, dict) and r.get("name"):
+                    restriction_names.append(r["name"])
+
             if restriction_names:
                 location = "Remote — " + ", ".join(restriction_names[:3])
             elif tz_restrictions:
@@ -1036,13 +672,13 @@ def fetch_himalayas_jobs() -> FetchResult:
 
             seen_urls.add(url)
             jobs.append({
-                "source": source,
-                "title": title,
-                "company": company,
-                "location": location,
-                "url": url,
+                "source":      source,
+                "title":       title,
+                "company":     company,
+                "location":    location,
+                "url":         url,
                 "description": description[:1000],
-                "salary": salary,
+                "salary":      salary,
             })
 
     if not jobs:
@@ -1054,21 +690,451 @@ def fetch_himalayas_jobs() -> FetchResult:
 
 
 # ---------------------------------------------------------------------------
+# SOURCE: Greenhouse (ATS job board — public API, no auth required)
+# ---------------------------------------------------------------------------
+
+from search_profile import GREENHOUSE_BOARDS as _GREENHOUSE_BOARDS
+
+_GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
+
+
+def fetch_greenhouse_jobs() -> FetchResult:
+    """
+    Fetch US remote IT/security jobs from Greenhouse-hosted job boards.
+    Greenhouse's board API is fully public — no authentication required.
+    Queries a curated list of tech/security employers and filters for
+    remote US roles matching the configured search keywords.
+    """
+    source    = "Greenhouse"
+    jobs: list[Job]     = []
+    seen_urls: set[str]  = set()
+    last_err: FetchResult | None = None
+
+    for board in _GREENHOUSE_BOARDS:
+        resp, err = _safe_get(
+            _GREENHOUSE_API.format(board=board),
+            source,
+            params={"content": "true"},
+        )
+        if err:
+            if err.status in (FetchStatus.NO_NETWORK,):
+                return err
+            if err.status != FetchStatus.HTTP_ERROR or (err.http_status or 0) not in (404, 410):
+                last_err = err
+                logger.debug("[%s] Board '%s': %s", source, board, err.detail)
+            continue
+
+        data, err = _parse_json(resp, source)
+        if err or not isinstance(data, dict):
+            last_err = err or FetchResult(
+                source, FetchStatus.PARSE_ERROR,
+                detail=f"Bad response from board '{board}'",
+            )
+            continue
+
+        for job in data.get("jobs", []):
+            if not isinstance(job, dict):
+                continue
+
+            title       = job.get("title") or ""
+            description = strip_html(job.get("content") or "")
+
+            if not keyword_match(title + " " + description, SEARCH_KEYWORDS):
+                continue
+
+            loc_data     = job.get("location", {})
+            raw_location = (loc_data.get("name") or "") if isinstance(loc_data, dict) else ""
+            loc_lower    = raw_location.lower()
+            is_us_eligible = (
+                not raw_location
+                or "remote" in loc_lower
+                or "united states" in loc_lower
+                or ", us" in loc_lower
+                or loc_lower.endswith(" us")
+                or any(s in loc_lower for s in (
+                    "new york", "san francisco", "austin", "seattle",
+                    "boston", "chicago", "denver", "atlanta", "raleigh",
+                ))
+            )
+            if not is_us_eligible:
+                continue
+
+            url = job.get("absolute_url") or ""
+            if not url or url in seen_urls:
+                continue
+
+            metadata  = job.get("metadata") or []
+            is_remote = any(
+                isinstance(m, dict) and "remote" in str(m.get("value") or "").lower()
+                for m in metadata
+            )
+            location = "Remote — United States" if is_remote else (raw_location or "United States")
+
+            seen_urls.add(url)
+            jobs.append({
+                "source":      source,
+                "title":       title,
+                "company":     board.replace("-", " ").title(),
+                "location":    location,
+                "url":         url,
+                "description": description[:1000],
+                "salary":      "Not specified",
+            })
+
+    if not jobs:
+        status = last_err.status if last_err else FetchStatus.EMPTY
+        detail = last_err.detail if last_err else "No matching remote US jobs found across boards"
+        return FetchResult(source, status, detail=detail)
+
+    return FetchResult(source, FetchStatus.OK, jobs=jobs[:MAX_JOBS_PER_SOURCE])
+
+
+# ---------------------------------------------------------------------------
+# SOURCE: USAJobs (US federal government jobs — official public API)
+# ---------------------------------------------------------------------------
+
+_USAJOBS_API_URL = "https://data.usajobs.gov/api/Search"
+
+
+def fetch_usajobs_jobs() -> FetchResult:
+    """
+    Fetch US federal IT/security jobs from USAJobs (data.usajobs.gov).
+    Free public API — requires a registered API key and email in .env.
+    Set USAJOBS_API_KEY and USAJOBS_EMAIL; if not set, source is skipped.
+    """
+    from config import USAJOBS_API_KEY, USAJOBS_EMAIL
+    source = "USAJobs"
+
+    if not USAJOBS_API_KEY or not USAJOBS_EMAIL:
+        return FetchResult(
+            source, FetchStatus.AUTH_ERROR,
+            detail="USAJOBS_API_KEY or USAJOBS_EMAIL not set — register free at developer.usajobs.gov",
+        )
+
+    jobs: list[Job]     = []
+    seen_urls: set[str]  = set()
+    last_err: FetchResult | None = None
+
+    for keyword in SEARCH_KEYWORDS[:6]:
+        resp, err = _safe_get(
+            _USAJOBS_API_URL,
+            source,
+            params={
+                "Keyword":         keyword,
+                "LocationName":    "Remote",
+                "RemoteIndicator": "True",
+                "ResultsPerPage":  str(MAX_JOBS_PER_SOURCE),
+                "SortField":       "OpenDate",
+                "SortDirection":   "Desc",
+                "Fields":          "Min",
+            },
+            headers={
+                "Host":              "data.usajobs.gov",
+                "User-Agent":        USAJOBS_EMAIL,
+                "Authorization-Key": USAJOBS_API_KEY,
+            },
+        )
+        if err:
+            last_err = err
+            if err.status in (FetchStatus.NO_NETWORK, FetchStatus.AUTH_ERROR):
+                return err
+            continue
+
+        data, err = _parse_json(resp, source)
+        if err:
+            last_err = err
+            continue
+
+        if not isinstance(data, dict):
+            last_err = FetchResult(source, FetchStatus.PARSE_ERROR, detail="Unexpected root type")
+            continue
+
+        search_result = data.get("SearchResult", {})
+        items         = search_result.get("SearchResultItems", [])
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            matched = item.get("MatchedObjectDescriptor", {})
+            if not isinstance(matched, dict):
+                continue
+
+            title     = matched.get("PositionTitle", "")
+            org       = matched.get("OrganizationName", "Unknown")
+            url       = matched.get("PositionURI", "")
+            apply_uri = matched.get("ApplyURI", [""])[0] if matched.get("ApplyURI") else url
+
+            locations = matched.get("PositionLocation", [])
+            if locations and isinstance(locations[0], dict):
+                loc      = locations[0]
+                city     = loc.get("CityName", "")
+                state    = loc.get("CountrySubDivisionCode", "")
+                location = f"{city}, {state}".strip(", ") or "United States"
+            else:
+                location = "United States"
+
+            remuneration = matched.get("PositionRemuneration", [{}])
+            sal          = remuneration[0] if remuneration else {}
+            sal_min      = sal.get("MinimumRange", "")
+            sal_max      = sal.get("MaximumRange", "")
+            if sal_min and sal_max:
+                try:
+                    salary = f"${int(float(sal_min)):,} – ${int(float(sal_max)):,}"
+                except ValueError:
+                    salary = f"{sal_min} – {sal_max}"
+            else:
+                salary = "Not specified"
+
+            qual        = matched.get("QualificationSummary", "") or ""
+            description = strip_html(qual)[:1000]
+
+            if not apply_uri or apply_uri in seen_urls:
+                continue
+
+            seen_urls.add(apply_uri)
+            jobs.append({
+                "source":      source,
+                "title":       title,
+                "company":     org,
+                "location":    location,
+                "url":         apply_uri,
+                "description": description,
+                "salary":      salary,
+            })
+
+    if not jobs:
+        status = last_err.status if last_err else FetchStatus.EMPTY
+        detail = last_err.detail if last_err else "No matching federal jobs found"
+        return FetchResult(source, status, detail=detail)
+
+    return FetchResult(source, FetchStatus.OK, jobs=jobs[:MAX_JOBS_PER_SOURCE])
+
+
+# ---------------------------------------------------------------------------
+# SOURCE: Dice  (plain HTTP — server-side rendered)
+# ---------------------------------------------------------------------------
+#
+# Dice SSR renders job cards with absolute hrefs:
+#   href="https://www.dice.com/job-detail/<uuid>"
+# The title text follows the anchor after some nested tags.
+
+_DICE_SEARCH_URL = "https://www.dice.com/jobs"
+_DICE_JOB_BASE   = "https://www.dice.com"
+
+# Match both absolute and relative forms of job-detail hrefs.
+_DICE_HREF_RE = re.compile(
+    r'href="((?:https://www\.dice\.com)?/job-detail/[0-9a-f\-]{30,})"',
+    re.IGNORECASE,
+)
+# Title text appears as the first substantial text node in the card after
+# the href anchor; skip any intervening tags.
+_DICE_TITLE_RE = re.compile(
+    r'href="(?:https://www\.dice\.com)?/job-detail/[0-9a-f\-]{30,}"'
+    r'[^>]*>(?:\s*<[^>]+>)*\s*([A-Z][^<]{3,120})',
+    re.IGNORECASE | re.DOTALL,
+)
+_DICE_COMPANY_RE = re.compile(
+    r'(?:companyname|company-profile)[^"]*"[^>]*>\s*([^<]{2,80})',
+    re.IGNORECASE,
+)
+_DICE_SALARY_RE = re.compile(
+    r'(USD\s[\d,\.]+(?:\s[-–]\s[\d,\.]+)?(?:\s(?:per\s)?(?:hour|year|yr|hr))?)',
+    re.IGNORECASE,
+)
+
+
+def fetch_dice_jobs() -> FetchResult:
+    """
+    Fetch remote US tech/security jobs from Dice via plain HTTP.
+    Dice server-side renders its search results pages; no Playwright needed.
+    Job cards contain absolute /job-detail/<uuid> hrefs as stable identifiers.
+    """
+    source     = "Dice"
+    jobs: list[Job]     = []
+    seen_urls: set[str]  = set()
+    last_err: FetchResult | None = None
+
+    for keyword in SEARCH_KEYWORDS[:5]:
+        resp, err = _safe_get(
+            _DICE_SEARCH_URL,
+            source,
+            params={
+                "q":                      keyword,
+                "filters.workplaceTypes": "Remote",
+                "countryCode":            "US",
+                "language":               "en",
+            },
+        )
+        if err:
+            last_err = err
+            if err.status in (FetchStatus.NO_NETWORK, FetchStatus.AUTH_ERROR):
+                return err
+            continue
+
+        html = resp.text
+
+        href_matches    = list(_DICE_HREF_RE.finditer(html))
+        title_matches   = list(_DICE_TITLE_RE.finditer(html))
+        company_matches = list(_DICE_COMPANY_RE.finditer(html))
+        salary_matches  = list(_DICE_SALARY_RE.finditer(html))
+
+        for i, hm in enumerate(href_matches):
+            raw_href = hm.group(1).strip()
+            # Normalise to absolute URL
+            job_url = raw_href if raw_href.startswith("http") else _DICE_JOB_BASE + raw_href
+            if job_url in seen_urls:
+                continue
+
+            title = strip_html(title_matches[i].group(1)).strip() if i < len(title_matches) else ""
+            if not title or len(title) < 4:
+                continue
+            if not keyword_match(title, SEARCH_KEYWORDS):
+                continue
+
+            company = company_matches[i].group(1).strip() if i < len(company_matches) else "Unknown"
+            salary  = salary_matches[i].group(1).strip()  if i < len(salary_matches)  else "Not specified"
+
+            seen_urls.add(job_url)
+            jobs.append({
+                "source":      source,
+                "title":       title,
+                "company":     company,
+                "location":    "Remote — United States",
+                "url":         job_url,
+                "description": "",   # full description fetched by validator downstream
+                "salary":      salary,
+            })
+
+        if len(jobs) >= MAX_JOBS_PER_SOURCE:
+            break
+
+    if not jobs:
+        status = last_err.status if last_err else FetchStatus.EMPTY
+        detail = last_err.detail if last_err else "No matching job cards found in HTML"
+        return FetchResult(source, status, detail=detail)
+
+    return FetchResult(source, FetchStatus.OK, jobs=jobs[:MAX_JOBS_PER_SOURCE])
+
+
+# ---------------------------------------------------------------------------
+# SOURCE: BuiltIn  (plain HTTP — slug-based URL structure)
+# ---------------------------------------------------------------------------
+#
+# BuiltIn's search uses path-based role slugs, not query parameters.
+# Correct URL pattern: /jobs/remote/<category>/search/<keyword-slug>
+# Job detail URLs:     /job/<title-slug>/<numeric-id>
+
+_BUILTIN_BASE = "https://builtin.com"
+
+# Map role targets to BuiltIn's slug taxonomy.
+# Add or remove entries here to tune coverage — no other changes needed.
+_BUILTIN_KEYWORD_SLUGS: list[tuple[str, str]] = [
+    ("network engineer",        "dev-engineering/search/network-engineer"),
+    ("systems administrator",   "dev-engineering/search/systems-administrator"),
+    ("cybersecurity analyst",   "dev-engineering/search/cybersecurity-analyst"),
+    ("security analyst",        "dev-engineering/search/security-analyst"),
+    ("soc analyst",             "dev-engineering/search/soc-analyst"),
+    ("it administrator",        "dev-engineering/search/it-administrator"),
+    ("infrastructure engineer", "dev-engineering/search/infrastructure-engineer"),
+    ("information security",    "dev-engineering/search/information-security"),
+]
+
+_BUILTIN_HREF_RE = re.compile(
+    r'href="(/job/[a-z0-9\-]+/\d+)"',
+    re.IGNORECASE,
+)
+_BUILTIN_TITLE_RE = re.compile(
+    r'/job/[a-z0-9\-]+/\d+"[^>]*>\s*([^<]{4,120})',
+    re.IGNORECASE,
+)
+_BUILTIN_COMPANY_RE = re.compile(
+    r'class="[^"]*company[^"]*"[^>]*>\s*([^<]{2,80})',
+    re.IGNORECASE,
+)
+
+
+def fetch_builtin_jobs() -> FetchResult:
+    """
+    Fetch remote US tech jobs from BuiltIn using plain HTTP.
+    BuiltIn's search pages are server-rendered at slug-based URLs.
+    Parses job card hrefs and titles from the returned HTML.
+    """
+    source     = "BuiltIn"
+    jobs: list[Job]     = []
+    seen_urls: set[str]  = set()
+    last_err: FetchResult | None = None
+
+    for _keyword, path in _BUILTIN_KEYWORD_SLUGS:
+        url = f"{_BUILTIN_BASE}/jobs/remote/{path}"
+
+        resp, err = _safe_get(url, source)
+        if err:
+            last_err = err
+            if err.status in (FetchStatus.NO_NETWORK, FetchStatus.AUTH_ERROR):
+                return err
+            continue
+
+        html = resp.text
+
+        href_matches    = list(_BUILTIN_HREF_RE.finditer(html))
+        title_matches   = list(_BUILTIN_TITLE_RE.finditer(html))
+        company_matches = list(_BUILTIN_COMPANY_RE.finditer(html))
+
+        for i, hm in enumerate(href_matches):
+            href    = hm.group(1).strip()
+            job_url = _BUILTIN_BASE + href
+            if job_url in seen_urls:
+                continue
+
+            title = strip_html(title_matches[i].group(1)).strip() if i < len(title_matches) else ""
+            if not title or len(title) < 4:
+                continue
+            if not keyword_match(title, SEARCH_KEYWORDS):
+                continue
+
+            company = company_matches[i].group(1).strip() if i < len(company_matches) else "Unknown"
+
+            seen_urls.add(job_url)
+            jobs.append({
+                "source":      source,
+                "title":       title,
+                "company":     company,
+                "location":    "Remote — United States",
+                "url":         job_url,
+                "description": "",   # full description fetched by validator downstream
+                "salary":      "Not specified",
+            })
+
+        if len(jobs) >= MAX_JOBS_PER_SOURCE:
+            break
+
+    if not jobs:
+        status = last_err.status if last_err else FetchStatus.EMPTY
+        detail = last_err.detail if last_err else "No job cards found — slug paths may have changed"
+        return FetchResult(source, status, detail=detail)
+
+    return FetchResult(source, FetchStatus.OK, jobs=jobs[:MAX_JOBS_PER_SOURCE])
+
+
+# ---------------------------------------------------------------------------
 # Aggregator
 # ---------------------------------------------------------------------------
 
+#: All registered fetchers as (display_name, callable) pairs.
+#: Add new sources here — no other changes required.
 _SOURCES: list[tuple[str, Callable[[], FetchResult]]] = [
-    ("Remotive",         fetch_remotive_jobs),
-    ("RemoteOK",         fetch_remoteok_jobs),
-    ("The Muse",         fetch_muse_jobs),
-    ("Jobicy",           fetch_jobicy_jobs),
-    ("Adzuna",           fetch_adzuna_jobs),
-    # --- new sources ---
-    ("Findwork",         fetch_findwork_jobs),
-    ("Himalayas",        fetch_himalayas_jobs),
-    ("Greenhouse",       fetch_greenhouse_jobs),
-    ("Dice",             fetch_dice_jobs),
-    ("USAJobs",          fetch_usajobs_jobs),
+    ("Remotive",   fetch_remotive_jobs),
+    ("RemoteOK",   fetch_remoteok_jobs),
+    ("The Muse",   fetch_muse_jobs),
+    ("Jobicy",     fetch_jobicy_jobs),
+    ("Adzuna",     fetch_adzuna_jobs),
+    ("Findwork",   fetch_findwork_jobs),
+    ("Himalayas",  fetch_himalayas_jobs),
+    ("Greenhouse", fetch_greenhouse_jobs),
+    ("Dice",       fetch_dice_jobs),
+    ("USAJobs",    fetch_usajobs_jobs),
+    ("BuiltIn",    fetch_builtin_jobs),
+    # CyberSN removed: job search is fully auth-gated with no public endpoint
 ]
 
 
@@ -1102,7 +1168,6 @@ def fetch_all_jobs() -> list[Job]:
         try:
             result = fetcher()
         except Exception as exc:
-            # Belt-and-suspenders: fetchers should never raise, but just in case.
             result = FetchResult(display_name, FetchStatus.ERROR, detail=str(exc))
             logger.exception("[Fetcher] Unhandled exception from %s fetcher", display_name)
 
@@ -1110,9 +1175,9 @@ def fetch_all_jobs() -> list[Job]:
         results.append(result)
 
     # --- Summary -----------------------------------------------------------
-    ok_sources      = [r for r in results if r.ok]
-    empty_sources   = [r for r in results if r.warning]
-    failed_sources  = [r for r in results if not r.ok and not r.warning]
+    ok_sources     = [r for r in results if r.ok]
+    empty_sources  = [r for r in results if r.warning]
+    failed_sources = [r for r in results if not r.ok and not r.warning]
 
     logger.info(
         "[Fetcher] Fetch complete — %d/%d sources OK, %d empty, %d failed",

@@ -8,6 +8,7 @@ Checks:
 - Security clearance requirements
 - Part-time / contract indicators (contextual matching only)
 - Seniority indicators (experience year patterns)
+- Outside travel zone (onsite/hybrid postings not in California or Oregon)
 
 Called after scoring, before cover letter generation.
 """
@@ -60,6 +61,17 @@ _EMPLOYMENT_CONTEXT_PATTERNS = [re.compile(p) for p in [
     r'intern\s+role',
     r'co[\s-]op\s+position',
 ]]
+
+# Matches "onsite", "on-site", or "hybrid" anywhere in the page source,
+# case-insensitive.
+_ONSITE_HYBRID_PATTERN = re.compile(r'\bon[\s-]?site\b|onsite|\bhybrid\b', re.IGNORECASE)
+
+# Jobs are only accepted as onsite/hybrid if located in one of these states.
+# Matched case-insensitively against the job's location string.
+_TRAVEL_ZONE_STATES = {
+    "california", "ca",
+    "oregon", "or",
+}
 
 _BOT_INDICATORS = [
     "just a moment",
@@ -188,6 +200,34 @@ def _find_disqualifying_content(full_text: str) -> tuple[bool, str | None]:
     return False, None
 
 
+def _is_outside_travel_zone(full_text: str, location: str) -> tuple[bool, str | None]:
+    """
+    Check whether a job is outside the acceptable travel zone.
+
+    A job is considered outside the travel zone when BOTH conditions hold:
+      1. The full page source contains "onsite", "on-site", or "hybrid"
+         (any capitalisation).
+      2. The job's location field does NOT indicate California or Oregon.
+
+    Returns (is_disqualified, reason_string).
+    """
+    if not _ONSITE_HYBRID_PATTERN.search(full_text):
+        return False, None
+
+    location_lower = (location or "").lower()
+
+    # Accept the job if any travel-zone token appears in the location string.
+    if any(state in location_lower for state in _TRAVEL_ZONE_STATES):
+        return False, None
+
+    matched_term = _ONSITE_HYBRID_PATTERN.search(full_text).group()
+    return (
+        True,
+        f"outside travel zone — onsite/hybrid posting not in CA or OR "
+        f"(matched: '{matched_term}', location: '{location or 'not specified'}')",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Per-job validation
 # ---------------------------------------------------------------------------
@@ -210,7 +250,13 @@ async def _validate_job(job: Job) -> tuple[bool, str | None]:
         return True, None
 
     is_disqualified, reason = _find_disqualifying_content(full_text)
+    if is_disqualified:
+        logger.info("[Validator] DISQUALIFIED — %s", reason)
+        return False, reason
 
+    is_disqualified, reason = _is_outside_travel_zone(
+        full_text, job.get("location", "")
+    )
     if is_disqualified:
         logger.info("[Validator] DISQUALIFIED — %s", reason)
         return False, reason

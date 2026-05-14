@@ -223,4 +223,4 @@ EXCLUDE_REQUIREMENT_KEYWORDS: list[str] = [
 RELEVANCE_THRESHOLD: int = 6
 
 # Maximum jobs fetched from any single source per pipeline run.
-MAX_JOBS_PER_SOURCE: int = 20
+MAX_JOBS_PER_SOURCE: int = 50
