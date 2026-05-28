@@ -227,6 +227,13 @@ NTFY_BASE_URL = "https://ntfy.sh"
 #   PREP_RESUME_CHARS=3000
 #   PREP_DESCRIPTION_CHARS=2000
 #   PREP_COMPANY_RESEARCH_CHARS=2000
+
+# ---------------------------------------------------------------------------
+# Resume tailoring — context window limits (chars fed into the LLM prompt)
+# ---------------------------------------------------------------------------
+
+RESUME_TAILOR_DESCRIPTION_CHARS = 6000   # full JD; ATS keywords live here
+RESUME_TAILOR_RESUME_CHARS       = 4000  # same budget as cover letter resume
 # ---------------------------------------------------------------------------
 
 PREP_RESUME_CHARS: int           = int(os.getenv("PREP_RESUME_CHARS",           "600"))

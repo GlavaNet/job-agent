@@ -363,6 +363,24 @@
             </div>
         </div>
         <div class="cover-letter" id="modal-cover-letter"></div>
+        <details id="modal-tailored-resume-section" style="display:none; margin-top:12px;">
+            <summary style="font-weight:600; cursor:pointer; color:var(--text-secondary);
+                            font-size:0.85rem; text-transform:uppercase; letter-spacing:0.04em;
+                            padding:6px 0;">
+                &#9658; Tailored Résumé (ATS optimised)
+            </summary>
+            <div id="modal-tailored-resume"
+                 class="cover-letter"
+                 style="margin-top:8px; white-space:pre-wrap;"></div>
+            <div style="margin-top:6px; display:flex; gap:8px;">
+                <button onclick="copyTailoredResume()"
+                        style="padding:6px 14px; border-radius:6px; border:none;
+                               background:var(--bg-tertiary); color:var(--text-secondary);
+                               cursor:pointer; font-size:0.85rem;">
+                    Copy to clipboard
+                </button>
+            </div>
+        </details>
         <textarea class="notes-input" id="modal-notes"
                   placeholder="Notes (optional)..." rows="2"></textarea>
         <div class="modal-actions">
@@ -371,6 +389,11 @@
             <button class="btn-cover-letter" id="modal-cover-letter-btn"
                     onclick="generateCoverLetter()" style="display:none;">
                 Generate Cover Letter
+            </button>
+            <button id="modal-tailor-btn" onclick="tailorResume()"
+                    style="display:none; background:#7c3aed; color:white;"
+                    class="btn-cover-letter">
+                Tailor Résumé
             </button>
             <a class="btn-link" id="modal-url" href="#"
                target="_blank">Open Job Posting ↗</a>
@@ -427,6 +450,22 @@
             clBtn.style.display = 'none';
         }
 
+        // Tailor Résumé button
+        const tailorBtn       = document.getElementById('modal-tailor-btn');
+        const tailoredSection = document.getElementById('modal-tailored-resume-section');
+        const tailoredText    = document.getElementById('modal-tailored-resume');
+        const hasTailored     = job.tailored_resume && job.tailored_resume.trim().length > 0;
+        if (hasTailored) {
+            tailoredText.textContent      = job.tailored_resume;
+            tailoredSection.style.display  = 'block';
+            tailorBtn.style.display        = 'none';
+        } else {
+            tailoredSection.style.display  = 'none';
+            tailorBtn.style.display        = 'inline-block';
+            tailorBtn.textContent          = 'Tailor Résumé';
+            tailorBtn.disabled             = false;
+        }
+
         const sel = document.getElementById('modal-status-select');
         sel.innerHTML = '';
         const statuses = {{ statuses | tojson }};
@@ -473,6 +512,36 @@
             btn.textContent = 'Error — see logs';
             btn.disabled = false;
         }
+    }
+
+    async function tailorResume() {
+        const btn = document.getElementById('modal-tailor-btn');
+        btn.textContent = 'Tailoring… (reload when ready)';
+        btn.disabled = true;
+        try {
+            const resp = await fetch(
+                '/api/resume/tailor/' + currentJobId,
+                { method: 'POST' }
+            );
+            const data = await resp.json();
+            if (data.status !== 'ok') {
+                btn.textContent = 'Error — see logs';
+                btn.disabled = false;
+            }
+        } catch (e) {
+            btn.textContent = 'Error — see logs';
+            btn.disabled = false;
+        }
+    }
+
+    function copyTailoredResume() {
+        const text = document.getElementById('modal-tailored-resume').textContent;
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = event.target;
+            const orig = btn.textContent;
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = orig; }, 1500);
+        });
     }
 
     function closeModal() {

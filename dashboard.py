@@ -29,6 +29,7 @@ from database import (
     get_stats,
     init_db,
     save_interview_prep,
+    save_tailored_resume,
     update_status,
 )
 from logger import setup_logging
@@ -233,6 +234,7 @@ def api_get_job(job_id: int):
 
     result = dict(job)
     result["salary_comparison"] = comparison
+    result["tailored_resume"] = result.get("tailored_resume") or ""
     return jsonify(result)
 
 
@@ -349,6 +351,35 @@ def api_generate_cover_letter(job_id: int):
     return jsonify({
         "status":  "ok",
         "message": f"Research and cover letter generation started for job {job_id}",
+    })
+
+
+
+@app.route("/api/resume/tailor/<int:job_id>", methods=["POST"])
+@login_required
+def api_tailor_resume(job_id: int):
+    """
+    Trigger ATS-optimised résumé tailoring for a job.
+    Runs in a background thread — response is immediate.
+    The tailored résumé is stored in jobs.tailored_resume.
+    """
+    from resume_tailor import generate_and_store_tailored_resume
+
+    job = get_job_by_id(job_id)
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+
+    thread = threading.Thread(
+        target=generate_and_store_tailored_resume,
+        args=(job_id,),
+        daemon=True,
+        name=f"resume-tailor-{job_id}",
+    )
+    thread.start()
+    logger.info("Résumé tailoring started for job %d", job_id)
+    return jsonify({
+        "status":  "ok",
+        "message": f"Résumé tailoring started for job {job_id}",
     })
 
 
