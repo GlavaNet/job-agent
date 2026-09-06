@@ -305,7 +305,13 @@ def score_job(
         match = re.search(r'\{.*\}', raw, re.DOTALL)
         if match:
             result = json.loads(match.group())
-            job["score"]        = int(result.get("score", 0))
+            score  = int(result.get("score", 0))
+            # 0 is reserved to mean "scoring failed" throughout the
+            # pipeline (see except block below and mark_seen/cache
+            # consumers). If the LLM ignores the 1-10 instruction and
+            # returns 0 for a genuinely bad match, clamp it up so 0
+            # stays an exclusive failure signal.
+            job["score"]        = max(score, 1)
             job["score_reason"] = result.get("reason", "")
         else:
             job["score"]        = 0
