@@ -3,11 +3,10 @@ Description=Job Agent Inbox Listener
 After=network.target
 
 [Service]
-User=user
-WorkingDirectory=/home/user/job-agent
-Environment=PATH=/home/user/job-agent/venv/bin
+# NOTE: replace /home/user/job-agent below (both lines) with your repo path
+EnvironmentFile=/home/user/job-agent/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/user/job-agent/venv/bin/python inbox_listener.py
+ExecStart=/home/user/job-agent/run_job_agent.sh inbox_listener.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
