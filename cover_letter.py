@@ -22,18 +22,32 @@ logger = logging.getLogger(__name__)
 # {description} — capped at CL_DESCRIPTION_CHARS (default 2000).
 # {company_research} — capped at CL_RESEARCH_CHARS (default 2000).
 # ---------------------------------------------------------------------------
+# TONED-DOWN PROMPT FOR COVER_LETTER.PY
+# Replace the existing COVER_LETTER_PROMPT with this version
+# It's more honest and avoids overselling skills
 
 COVER_LETTER_PROMPT = """\
-You are a professional cover letter writer.
+You are a professional cover letter writer. Your job is to write honest,
+authentic letters that match the candidate to the role.
 
-Using the candidate profile, job details, and any company research below,
-write a complete, tailored cover letter ready to send with minimal editing.
-Keep it to 3 paragraphs: opening (why this company and role), skills
-alignment (specific evidence from the profile), closing (call to action).
+Write a 3-paragraph cover letter:
+  1. Opening: Why this company and role appeal to the candidate
+  2. Body: 1-2 specific skills/experiences that match the job
+  3. Closing: Simple call to action
 
-Where company research is provided, reference something specific and genuine
-about the company — their tech stack, culture, or a recent development —
-to demonstrate informed interest. Do not invent facts not in the research.
+CRITICAL GUIDELINES:
+- Be honest and specific. Avoid generic language.
+- Do not claim expertise you cannot defend in an interview.
+- Do not invent skills or exaggerate experience.
+- If the candidate doesn't have a required skill, acknowledge the gap
+  rather than pretend to have it. Frame related skills instead.
+- Avoid superlatives ("passionate about", "driven by", "excited").
+  Use straightforward language instead.
+- If company research is provided, reference ONE specific fact
+  (tech stack, recent news, culture detail). Do not fabricate claims.
+- Keep it human and conversational. Sound like the candidate, not a sales pitch.
+- Do not oversell the candidate's home lab or side projects as proof of
+  professional-grade expertise. They are learning tools, not credentials.
 
 {candidate_context}
 
@@ -143,6 +157,34 @@ def generate_cover_letter(
     return invoke_llm(prompt)
 
 
+def get_resume_text_for_job(job_id: int) -> str:
+    """
+    Return the best available resume text for cover letter generation.
+
+    Prefers the tailored resume stored in jobs.tailored_resume for this
+    specific job (produced by resume_tailor.py) so the cover letter is
+    written from an already ATS-optimised profile.  Falls back to the
+    raw resume file when no tailored version exists yet.
+    """
+    from config import RESUME_PATH
+    from database import get_job_by_id
+    from resume_parser import load_resume
+
+    job = get_job_by_id(job_id)
+    if job:
+        tailored = (job.get("tailored_resume") or "").strip()
+        if tailored:
+            logger.debug(
+                "[CoverLetter] Using tailored resume for job %d", job_id
+            )
+            return tailored
+
+    logger.debug(
+        "[CoverLetter] No tailored resume for job %d — using default", job_id
+    )
+    return load_resume(RESUME_PATH)
+
+
 def generate_and_store_cover_letter_for_job(
     job_id: int,
     research: dict | None,
@@ -167,7 +209,7 @@ def generate_and_store_cover_letter_for_job(
     set_cover_letter_status(job_id, "in_progress")
 
     try:
-        resume_text = load_resume(RESUME_PATH)
+        resume_text = get_resume_text_for_job(job_id)
     except Exception:
         logger.exception("[CoverLetter] Failed to load résumé for job %d", job_id)
         set_cover_letter_status(job_id, "failed")

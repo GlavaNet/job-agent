@@ -33,36 +33,30 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Prompt
 # ---------------------------------------------------------------------------
+# KEYWORD-AWARE RESUME TAILOR PROMPT
+# This version preserves structure AND strategically highlights keywords
+# you actually have from the job description
 
-TAILOR_PROMPT = """You are an expert résumé writer who specialises in ATS optimisation.
+TAILOR_PROMPT = """You are a résumé editor. Your job is to tailor the provided résumé
+to a specific job by reordering and rewording bullet points to surface relevant
+skills. You do NOT create, add, or remove sections. You do NOT add preamble.
 
-Your task is to rewrite the candidate's résumé so it scores highly against
-the target job description. Follow every rule below — no exceptions.
+CRITICAL RULES:
+1. PRESERVE EVERY SECTION from the original résumé exactly as-is.
+   - Keep all section headers, formatting, structure
+   - Do not remove sections
+   - Do not add new sections like "Objective"
+2. PRESERVE ALL DATES, company names, job titles exactly
+3. USE KEYWORD GUIDANCE (below) to reorder bullets strategically
+4. WITHIN EACH SECTION: reorder bullets to prioritize matched keywords
+   - Move bullets that showcase the prioritized keywords to the top
+   - Reword bullets (minimally) to make keyword connections explicit
+   - Example: "Managed servers" → "Managed AWS servers" if AWS is prioritized
+5. Use straight quotes (") and hyphens (-) only. No smart quotes or em-dashes.
+6. Do not add conversational text, preamble, or explanation
+7. Return ONLY the edited résumé text, no preamble
 
-RULES:
-1. NEVER invent experience, skills, tools, or credentials the candidate
-   does not already have.  Only reframe and reword what exists.
-2. Mirror the exact action verbs, soft-skill phrases, and technical
-   keywords from the job description wherever they truthfully apply.
-3. Prioritise bullet points that align with the job's stated
-   responsibilities and required qualifications — move them higher.
-4. Quantify achievements wherever the original résumé already contains
-   numbers; do not invent metrics.
-5. Replace weak verbs ("helped with", "was responsible for") with strong
-   ATS-friendly action verbs drawn from the job description or the list:
-   Architected, Automated, Collaborated, Configured, Delivered, Deployed,
-   Designed, Developed, Engineered, Implemented, Led, Maintained,
-   Managed, Monitored, Optimised, Reduced, Resolved, Streamlined,
-   Supported, Troubleshot.
-6. Include the job's soft-skill language (e.g. "cross-functional
-   collaboration", "stakeholder communication") in the summary/profile
-   section only — do not pepper it through every bullet.
-7. Keep all original section headings, dates, company names, and job
-   titles intact.
-8. Output the complete tailored résumé as plain text, ready to paste
-   into an application form.  Do not add commentary or preamble.
-
----
+{keyword_guidance}
 
 TARGET JOB
 Title:   {title}
@@ -72,44 +66,43 @@ Description:
 
 ---
 
-CANDIDATE'S CURRENT RÉSUMÉ:
+ORIGINAL RÉSUMÉ (preserve this structure):
 {resume}
 
 ---
 
-Write the tailored résumé now:"""
+Now edit the résumé by:
+1. Reordering bullets within each section to surface the prioritized keywords
+2. Minimally rewording to make connections explicit (e.g., mention tool names)
+3. Keeping every section and all original information
+
+Output ONLY the edited résumé, no preamble:"""
 
 # ---------------------------------------------------------------------------
 # Core function
 # ---------------------------------------------------------------------------
 
 def generate_tailored_resume(job: Job, resume_text: str) -> str:
-    """
-    Generate an ATS-optimised résumé tailored to *job*.
-
-    Parameters
-    ----------
-    job:
-        Job dict with at minimum title, company, description.
-    resume_text:
-        Raw text of the candidate's current résumé.
-
-    Returns
-    -------
-    str
-        The tailored résumé as plain text.
-    """
+    """Generate a tailored resume for a job, highlighting matched keywords."""
+    from keyword_matcher import match_keywords, generate_keyword_hint
+    
     description = (job.get("description") or "")[:RESUME_TAILOR_DESCRIPTION_CHARS]
     resume_excerpt = resume_text[:RESUME_TAILOR_RESUME_CHARS]
+
+    # Find keywords from job that you actually have
+    matched_keywords, unmatched = match_keywords(description, resume_excerpt)
+    
+    # Generate hint for LLM
+    keyword_guidance = generate_keyword_hint(matched_keywords)
 
     prompt = TAILOR_PROMPT.format(
         title=job.get("title", ""),
         company=job.get("company", ""),
         description=description,
         resume=resume_excerpt,
+        keyword_guidance=keyword_guidance,
     )
     return invoke_llm(prompt)
-
 
 def generate_and_store_tailored_resume(job_id: int) -> bool:
     """

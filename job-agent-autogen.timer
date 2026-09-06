@@ -1,0 +1,17 @@
+[Unit]
+Description=Daily auto-generate timer for tailored resumes and cover letters
+Requires=job-agent-autogen.service
+
+[Timer]
+# Run at 2 AM daily
+OnCalendar=daily
+OnCalendar=*-*-* 02:00:00
+
+# Run immediately on boot if we missed a scheduled run
+Persistent=true
+
+# If a run takes longer than 1 hour, consider it failed
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target
