@@ -12,7 +12,15 @@ pymupdf>=1.24
 scrapling>=0.2
 curl_cffi>=0.7
 playwright>=1.58.0
+patchright>=1.52.0
 msgspec>=0.21.1
 browserforge>=1.2.4
+
+# NOTE: after `pip install -r requirements.txt`, browser binaries are
+# NOT installed automatically. Run once per venv:
+#   patchright install chromium
+#   patchright install-deps chromium   # OS-level libs (fresh Ubuntu boxes need this)
+# If any code path still uses plain playwright directly, also run:
+#   playwright install chromium
 
 # Database (stdlib sqlite3 is used directly — no extra package needed)
