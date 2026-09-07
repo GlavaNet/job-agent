@@ -1,14 +1,17 @@
 # database.py
+import os
 import logging
 import sqlite3
 import threading
 from datetime import datetime
 
+from config import DATA_DIR
 from models import CompanyResearch, Job
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = "jobs.db"
+# DB_PATH = "jobs.db"
+DB_PATH = os.path.join(DATA_DIR, "jobs.db")
 
 # Guards all write operations so concurrent dashboard + pipeline
 # access never produces a torn write or "database is locked" error.

@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1
+#
+# job-agent — slim image
+#
+# For dashboard.py and inbox_listener.py — neither imports scrapling,
+# playwright, or manual_job_scraper anywhere in their call graph. They
+# only need Flask, database.py, config.py, and a handful of sibling
+# modules (salary_normalizer, company_researcher, cover_letter,
+# resume_tailor, interview_prep) — none of which touch a browser.
+#
+# Result: no Playwright base image, no Chromium, no build-essential.
+# mcr.microsoft.com/playwright/python is ~1.5-2GB uncompressed; this
+# image is well under 200MB. Smaller image = faster pulls/restarts and
+# less attack surface on the two services that are actually
+# network-facing (dashboard serves an HTTP port; listener processes
+# messages from the ntfy inbox topic).
+#
+# Also the base for Dockerfile.scheduler (FROM job-agent-slim:latest) —
+# auto_generate_resume_cover_letter.py's import chain (resume_tailor,
+# cover_letter) has no Playwright dependency either.
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# sqlite3 CLI only, for debugging (`docker compose exec dashboard sqlite3 ...`).
+# No build-essential — nothing in requirements-base.txt needs a compiler.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-base.txt .
+RUN pip install --no-cache-dir -r requirements-base.txt
+
+COPY . .
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+RUN mkdir -p /app/state /app/state/resume \
+    && useradd --create-home --uid 1000 jobagent \
+    && chown -R jobagent:jobagent /app
+
+USER jobagent
+
+EXPOSE 5000
+
+# No default CMD — compose.yaml sets each service's command, e.g.
+#   dashboard: ["python3", "/app/dashboard.py"]
+#   listener:  ["python3", "/app/inbox_listener.py"]

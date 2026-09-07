@@ -1,0 +1,17 @@
+.env
+.git
+.gitignore
+data/
+resume/
+*.pyc
+__pycache__/
+venv/
+.venv/
+*.db
+*.db-wal
+*.db-shm
+*.log
+seen_jobs.json
+manual_jobs.txt
+processed_jobs.txt
+preference_profile.json

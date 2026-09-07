@@ -1,0 +1,29 @@
+# requirements-scraping.txt
+#
+# Only needed by job_agent.py's manual_job_scraper.py (Dice source via
+# scrapling.fetchers.DynamicFetcher) and, transitively, runner.py — since
+# runner.py spawns job_agent.py as a subprocess in the same environment.
+#
+# NOT needed by dashboard.py, inbox_listener.py, or
+# auto_generate_resume_cover_letter.py — none of them import scrapling
+# or playwright anywhere in their call graph. Installing this stack in
+# those containers only adds image size and attack surface for no
+# functional benefit. See requirements-base.txt for what they actually
+# need.
+#
+# Install on top of requirements-base.txt:
+#   pip install -r requirements-base.txt -r requirements-scraping.txt
+
+scrapling>=0.2
+curl_cffi>=0.7
+playwright>=1.58.0
+patchright>=1.52.0
+msgspec>=0.21.1
+browserforge>=1.2.4
+
+# NOTE: after installing outside this image, browser binaries are NOT
+# installed automatically. Run once:
+#   patchright install chromium
+#   patchright install-deps chromium   # OS-level libs (fresh Ubuntu boxes need this)
+# The mcr.microsoft.com/playwright/python base image (see Dockerfile)
+# already ships these pre-installed and version-matched.

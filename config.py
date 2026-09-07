@@ -78,12 +78,29 @@ _secrets = _Secrets()
 
 
 # ---------------------------------------------------------------------------
+# Data directory
+#
+# All of job-agent's runtime state (jobs.db, manual_jobs.txt,
+# processed_jobs.txt, seen_jobs.json, preference_profile.json, resume/)
+# lives under this directory. Defaults to "." (the current working
+# directory) so existing bare-metal installs that have never set this
+# variable keep reading/writing exactly where they always have - the
+# repo root. Set JOBAGENT_DATA_DIR in .env once you've moved these
+# files into a dedicated data/ directory (see README).
+# ---------------------------------------------------------------------------
+DATA_DIR = os.getenv("JOBAGENT_DATA_DIR", ".")
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
-RESUME_PATH           = "resume/resume.pdf"
-MANUAL_JOBS_FILE      = "manual_jobs.txt"
-PROCESSED_JOBS_FILE   = "processed_jobs.txt"
+RESUME_PATH           = os.path.join(DATA_DIR, "resume", "resume.pdf")
+MANUAL_JOBS_FILE      = os.path.join(DATA_DIR, "manual_jobs.txt")
+PROCESSED_JOBS_FILE   = os.path.join(DATA_DIR, "processed_jobs.txt")
+
+# RESUME_PATH           = "resume/resume.pdf"
+# MANUAL_JOBS_FILE      = "manual_jobs.txt"
+# PROCESSED_JOBS_FILE   = "processed_jobs.txt"
 
 # ---------------------------------------------------------------------------
 # Pipeline tuning  (values come from search_profile.py)

@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1
+#
+# job-agent-scheduler
+#
+# Replaces TWO previously separate schedulers:
+#   1. job-agent-autogen.timer (systemd) — daily 02:00 run of
+#      auto_generate_resume_cover_letter.py
+#   2. n8n's "Job Agent Daily Run" workflow — a Schedule Trigger node
+#      (cron: "0 8 * * 1-5", i.e. 8am on weekdays only) that POSTed to
+#      runner.py's /run endpoint. n8n has been dropped entirely (email
+#      digest scanning and rejection detection are no longer in use),
+#      so this cron container now owns both schedules.
+#
+# Built FROM job-agent-slim:latest, not the Playwright image:
+# auto_generate_resume_cover_letter.py's import chain (resume_tailor.py,
+# cover_letter.py) has no Playwright dependency — it only needs config,
+# database, llm_client, models, resume_parser, all covered by
+# requirements-base.txt. Triggering /run on the `runner` container is
+# just an HTTP call (curl), so it doesn't need Playwright locally either.
+
+FROM job-agent-slim:latest
+
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends cron curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cron needs the environment spelled out explicitly — it does not
+# inherit ENV from the Dockerfile or the container's runtime environment
+# the way a normal foreground process would.
+RUN { \
+      echo 'SHELL=/bin/bash'; \
+      echo 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'; \
+      echo 'PYTHONPATH=/app'; \
+      echo 'PYTHONUNBUFFERED=1'; \
+      echo ''; \
+      echo '# Daily pipeline run, weekdays only — was n8n Job_Agent_Daily_Run.json'; \
+      echo '# (original n8n Schedule Trigger cron expression: 0 8 * * 1-5)'; \
+      echo '0 8 * * 1-5 curl -sf -X POST http://runner:8888/run ${RUNNER_SECRET:+-H "Authorization: Bearer $RUNNER_SECRET"} >> /app/state/daily-run.log 2>&1 || echo "$(date -Iseconds) daily run trigger failed" >> /app/state/daily-run.log'; \
+      echo ''; \
+      echo '# Daily auto-generate tailored resumes/cover letters — was job-agent-autogen.timer'; \
+      echo '0 2 * * * python3 /app/auto_generate_resume_cover_letter.py >> /app/state/autogen.log 2>&1'; \
+    } > /etc/cron.d/job-agent \
+    && chmod 0644 /etc/cron.d/job-agent \
+    && crontab /etc/cron.d/job-agent
+
+# .env values (RUNNER_SECRET, API keys, JOBAGENT_DATA_DIR, etc.) are
+# injected by compose's env_file/environment at container start, not
+# baked into the image — but cron jobs run in a session that doesn't
+# see the container's process environment at all. This entrypoint
+# re-exports it into /etc/environment, which cron sources before
+# running each job, so those values actually reach both the curl call
+# and auto_generate_resume_cover_letter.py.
+RUN echo '#!/bin/bash' > /entrypoint.sh \
+    && echo 'env | grep -v "^HOME=\|^PWD=\|^SHLVL=" > /etc/environment' >> /entrypoint.sh \
+    && echo 'cron -f' >> /entrypoint.sh \
+    && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

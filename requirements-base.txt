@@ -1,0 +1,16 @@
+# requirements-base.txt
+#
+# Shared by every job-agent process. Used directly by dashboard.py,
+# inbox_listener.py, and auto_generate_resume_cover_letter.py (via the
+# scheduler) — none of which import scrapling/playwright anywhere in
+# their dependency chain. job_agent.py (via runner.py) additionally
+# needs requirements-scraping.txt on top of this file.
+
+flask>=3.0
+python-dotenv>=1.0
+requests>=2.31
+
+# PDF parsing (resume_parser.py)
+pymupdf>=1.24
+
+# Database: stdlib sqlite3 is used directly — no extra package needed.

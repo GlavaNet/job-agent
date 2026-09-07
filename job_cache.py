@@ -4,11 +4,13 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+from config import DATA_DIR
 from models import Job, JobCache
 
 logger = logging.getLogger(__name__)
 
-CACHE_FILE = "seen_jobs.json"
+# CACHE_FILE = "seen_jobs.json"
+CACHE_FILE = os.path.join(DATA_DIR, "seen_jobs.json")
 
 
 def load_cache() -> JobCache:

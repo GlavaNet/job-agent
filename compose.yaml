@@ -1,0 +1,202 @@
+# ---------------------------------------------------------------------------
+# job-agent — Docker Compose stack
+#
+# Five services, three images:
+#   job-agent           (Dockerfile)          — runner (job_agent.py's
+#                                                manual_job_scraper needs
+#                                                Playwright for Dice)
+#   job-agent-slim      (Dockerfile.slim)     — dashboard, listener (no
+#                                                Playwright anywhere in
+#                                                their import graph)
+#   job-agent-scheduler (Dockerfile.scheduler, FROM job-agent-slim) —
+#                                                cron: daily pipeline
+#                                                trigger + daily autogen
+#
+# n8n is NOT part of this stack. Both n8n workflows that used to justify
+# it (email digest scanning, rejection-email detection) are no longer in
+# use — job discovery now relies on the scheduled pipeline runs plus the
+# ntfy phone-share flow (inbox_listener.py -> manual_jobs.txt), and
+# rejection handling is manual. The `scheduler` service's cron replaces
+# n8n's remaining job: the daily HTTP trigger to runner.py's /run route.
+#
+# --- Path layout ------------------------------------------------------
+# config.py, database.py, job_cache.py, and preference_engine.py all
+# resolve their file paths through JOBAGENT_DATA_DIR (env var, defaults
+# to "." for bare-metal compatibility — see config.py). Every service
+# below sets it to /app/state, a plain bind-mounted directory from the
+# host's ./data.
+#
+# --- Build order --------------------------------------------------------
+# Dockerfile.scheduler is FROM job-agent-slim:latest, and Compose does
+# not track that as a build dependency (it only tracks compose-level
+# depends_on between running containers, not Dockerfile FROM references
+# to another service's image). Build the slim image before the
+# scheduler on a fresh checkout:
+#
+#   docker compose build dashboard      # produces job-agent-slim:latest
+#   docker compose build                # builds everything else, incl. scheduler
+#   docker compose up -d
+#
+# First-time setup on the host:
+#   mkdir -p data/resume
+#   cp /path/to/your/resume.pdf data/resume/resume.pdf
+#   cp .env.example .env   # fill in secrets
+#
+# Everyday use:
+#   docker compose logs -f dashboard
+#   docker compose logs -f scheduler                        # cron output
+#   docker compose exec runner python3 /app/job_agent.py    # one-off manual run
+#   docker compose exec runner curl -X POST localhost:8888/run  # trigger via HTTP, like cron does
+#   docker compose exec dashboard sqlite3 /app/state/jobs.db
+# ---------------------------------------------------------------------------
+
+x-jobagent-volumes: &jobagent-volumes
+  - ./data:/app/state
+
+services:
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: job-agent-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      # Exposed to the host too, so you can `ollama pull` / debug directly.
+      # Drop this if you don't want it reachable outside the compose network.
+      - "127.0.0.1:11434:11434"
+    # Uncomment for GPU access (requires nvidia-container-toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # One-shot init container: pulls the model into the shared ollama-models
+  # volume on first start, then exits. Other services wait on this via
+  # `condition: service_completed_successfully`.
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: job-agent-ollama-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama-models:/root/.ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        OLLAMA_HOST=ollama:11434 ollama pull ${OLLAMA_MODEL:-llama3.1:8b}
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: job-agent:latest
+    container_name: job-agent-runner
+    restart: unless-stopped
+    command: ["python3", "/app/runner.py"]
+    env_file: .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      JOBAGENT_DATA_DIR: /app/state
+    volumes: *jobagent-volumes
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8888/status').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # runner.py's /run endpoint is called by the scheduler container over
+    # this docker network (http://runner:8888/run) — no port published
+    # to the host unless you want to trigger it manually from outside.
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.slim
+    image: job-agent-slim:latest
+    container_name: job-agent-dashboard
+    restart: unless-stopped
+    command: ["python3", "/app/dashboard.py"]
+    env_file: .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      JOBAGENT_DATA_DIR: /app/state
+    volumes: *jobagent-volumes
+    ports:
+      - "5000:5000"
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/healthz').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  listener:
+    build:
+      context: .
+      dockerfile: Dockerfile.slim
+    image: job-agent-slim:latest
+    container_name: job-agent-listener
+    restart: unless-stopped
+    command: ["python3", "/app/inbox_listener.py"]
+    env_file: .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      JOBAGENT_DATA_DIR: /app/state
+    volumes: *jobagent-volumes
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+
+  # Replaces job-agent-autogen.timer AND n8n's "Job Agent Daily Run"
+  # workflow (see Dockerfile.scheduler for both cron lines and the
+  # original schedules they're matching).
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler
+    image: job-agent-scheduler:latest
+    container_name: job-agent-scheduler
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      JOBAGENT_DATA_DIR: /app/state
+    volumes: *jobagent-volumes
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+      runner:
+        condition: service_healthy
+
+volumes:
+  ollama-models:
+    # Pulled models persist here across container recreates/rebuilds.
+
+networks:
+  default:
+    name: job-agent-net

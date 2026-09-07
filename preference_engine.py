@@ -29,12 +29,14 @@ import logging
 import os
 from datetime import datetime, date
 
+from config import DATA_DIR
 from database import get_all_jobs
 from llm_client import invoke_llm
 
 logger = logging.getLogger(__name__)
 
-PROFILE_PATH = "preference_profile.json"
+# PROFILE_PATH = "preference_profile.json"
+PROFILE_PATH = os.path.join(DATA_DIR, "preference_profile.json")
 
 # Statuses that represent a deliberate decision by the user.
 _DECIDED_STATUSES = {"applied", "withdrawn", "rejected", "offer received"}
