@@ -15,7 +15,9 @@ from logger import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-from config import MANUAL_JOBS_FILE, NTFY_BASE_URL, NTFY_INBOX_TOPIC
+# unified-db: queue via database
+from config import NTFY_BASE_URL, NTFY_INBOX_TOPIC
+from database import enqueue_manual_url, is_url_queued
 from job_tracker import get_processed_urls
 from notifier import notify_url_duplicate, notify_url_invalid, notify_url_received
 
@@ -56,24 +58,13 @@ def _extract_url(text: str) -> str | None:
 
 
 def _is_already_queued(url: str) -> bool:
-    """Return True if the URL is already present in manual_jobs.txt."""
-    try:
-        with open(MANUAL_JOBS_FILE, "r", encoding="utf-8") as fh:
-            for line in fh:
-                stripped = line.strip()
-                if stripped == url and not stripped.startswith("#"):
-                    return True
-    except FileNotFoundError:
-        pass
-    return False
+    """Return True if the URL is already pending in manual_queue."""
+    return is_url_queued(url)
 
 
 def _append_url(url: str) -> None:
-    """Append a new URL to manual_jobs.txt with a timestamp comment."""
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    with open(MANUAL_JOBS_FILE, "a", encoding="utf-8") as fh:
-        fh.write(f"\n# Added from phone {timestamp}\n{url}\n")
+    """Add a new URL to manual_queue, tagged as arriving from phone."""
+    enqueue_manual_url(url, source="phone")
     logger.info("Queued: %s", url)
 
 

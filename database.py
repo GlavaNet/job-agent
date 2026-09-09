@@ -50,6 +50,29 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _init_manual_queue_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS manual_queue (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            url         TEXT NOT NULL UNIQUE,
+            status      TEXT NOT NULL DEFAULT 'pending',
+            source      TEXT,
+            added_at    TEXT NOT NULL,
+            resolved_at TEXT
+        )
+    """)
+
+
+def _init_preference_profile_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS preference_profile (
+            id           INTEGER PRIMARY KEY CHECK (id = 1),
+            profile_text TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        )
+    """)
+
+
 def _init_companies_table(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS companies (
@@ -123,11 +146,22 @@ def init_db() -> None:
             _migrate_add_column(conn, "jobs", "salary_max", "INTEGER")
             _migrate_add_column(conn, "jobs", "salary_midpoint", "INTEGER")
             _migrate_add_column(conn, "jobs", "tailored_resume", "TEXT")
+            _migrate_add_column(conn, "jobs", "process_status", "TEXT DEFAULT 'ok'")
             # Index used by is_likely_duplicate() on every insert
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_jobs_company "
                 "ON jobs(company)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_process_status "
+                "ON jobs(process_status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_date_seen "
+                "ON jobs(date_seen)"
+            )
+            _init_manual_queue_table(conn)
+            _init_preference_profile_table(conn)
             _init_companies_table(conn)
             conn.commit()
             logger.info("Database initialised at %s", DB_PATH)
@@ -170,13 +204,19 @@ def is_likely_duplicate(title: str, company: str) -> bool:
 def upsert_job(job: Job, cover_letter: str = "") -> int:
     """
     Insert a new job or update scoring data if the URL already exists.
-    Returns the row id, or -1 if skipped as a likely duplicate.
-
-    On update: refreshes scoring fields but preserves status and notes.
-    On insert: runs fuzzy duplicate check first.
     """
     from salary_normalizer import enrich_job_salary
     enrich_job_salary(job)
+
+    # unified-db: upsert_job rewritten
+    # score=0 must never coexist with process_status='ok' (mirrors the
+    # jobs.score >= 1 invariant enforced at scoring time by job_scorer.py's
+    # max(score, 1) clamp; SQLite can't add a CHECK via ALTER TABLE on an
+    # existing table, so it is enforced here instead).
+    incoming_score = job.get("score", 0)
+    process_status = job.get("process_status") or ("ok" if incoming_score and incoming_score >= 1 else "failed")
+    if process_status == "ok" and (not incoming_score or incoming_score < 1):
+        process_status = "failed"
 
     with _db_lock:
         conn = get_connection()
@@ -200,7 +240,9 @@ def upsert_job(job: Job, cover_letter: str = "") -> int:
                         score               = ?,
                         score_reason        = ?,
                         cover_letter        = ?,
-                        cover_letter_status = ?
+                        cover_letter_status = ?,
+                        process_status      = ?,
+                        date_seen           = COALESCE(date_seen, ?)
                     WHERE url = ?
                 """, (
                     job.get("title", ""),
@@ -215,27 +257,20 @@ def upsert_job(job: Job, cover_letter: str = "") -> int:
                     job.get("score_reason", ""),
                     cover_letter,
                     "complete" if cover_letter else "pending",
+                    process_status,
+                    datetime.now().strftime("%Y-%m-%d"),
                     job["url"],
                 ))
                 conn.commit()
                 return existing["id"]
-
-            if is_likely_duplicate(
-                job.get("title", ""), job.get("company", "")
-            ):
-                logger.debug(
-                    "Skipping likely duplicate: %s @ %s",
-                    job.get("title", ""), job.get("company", ""),
-                )
-                return -1
 
             cursor = conn.execute("""
                 INSERT INTO jobs (
                     url, title, company, location, salary,
                     salary_min, salary_max, salary_midpoint,
                     source, score, score_reason, cover_letter,
-                    cover_letter_status, status, date_seen
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not applied', ?)
+                    cover_letter_status, status, process_status, date_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not applied', ?, ?)
             """, (
                 job["url"],
                 job.get("title", ""),
@@ -250,6 +285,7 @@ def upsert_job(job: Job, cover_letter: str = "") -> int:
                 job.get("score_reason", ""),
                 cover_letter,
                 "complete" if cover_letter else "pending",
+                process_status,
                 datetime.now().strftime("%Y-%m-%d"),
             ))
             conn.commit()
@@ -621,3 +657,192 @@ def get_stats() -> dict:
 # Initialise on import so every module that imports database
 # gets a ready schema without needing to call init_db() explicitly.
 init_db()
+
+
+# --- unified-db additions ---
+# manual_queue: replaces manual_jobs.txt (queue) + job_tracker.py's
+# flock-based writes. SQLite's own write serialization (the module-level
+# _db_lock plus WAL mode) replaces fcntl.flock.
+
+def is_url_queued(url: str) -> bool:
+    """Return True if url is already pending in manual_queue."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM manual_queue WHERE url = ? AND status = 'pending'",
+            (url,),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def enqueue_manual_url(url: str, source: str = "phone") -> None:
+    """Add a URL to the manual queue. No-op (via UNIQUE) if already present."""
+    with _db_lock:
+        conn = get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO manual_queue (url, status, source, added_at)
+                VALUES (?, 'pending', ?, ?)
+                """,
+                (url, source, datetime.now().strftime("%Y-%m-%d %H:%M")),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def mark_manual_url_resolved(url: str, status: str = "done") -> None:
+    """
+    Mark a manual_queue entry resolved. status: 'done' | 'blocked' | 'failed'.
+    Mirrors the old job_tracker.mark_url_processed() behaviour.
+    """
+    with _db_lock:
+        conn = get_connection()
+        try:
+            conn.execute(
+                """
+                UPDATE manual_queue
+                SET status = ?, resolved_at = ?
+                WHERE url = ?
+                """,
+                (status, datetime.now().strftime("%Y-%m-%d %H:%M"), url),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_pending_manual_urls() -> list[str]:
+    """Return all URLs currently pending in manual_queue, oldest first."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT url FROM manual_queue WHERE status = 'pending' ORDER BY added_at"
+        ).fetchall()
+        return [row["url"] for row in rows]
+    finally:
+        conn.close()
+
+
+def get_all_processed_urls() -> set[str]:
+    """
+    Replaces job_tracker.get_processed_urls()'s four-source union.
+    Now a single query across jobs (any process_status) + resolved
+    manual_queue entries.
+    """
+    conn = get_connection()
+    try:
+        urls: set[str] = set()
+        for row in conn.execute("SELECT url FROM jobs WHERE url IS NOT NULL"):
+            urls.add(row["url"])
+        for row in conn.execute(
+            "SELECT url FROM manual_queue WHERE status != 'pending'"
+        ):
+            urls.add(row["url"])
+        return urls
+    finally:
+        conn.close()
+
+
+# preference_profile: replaces preference_profile.json
+
+def get_preference_profile() -> str | None:
+    """Return the current preference profile text, or None if not yet built."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT profile_text FROM preference_profile WHERE id = 1"
+        ).fetchone()
+        return row["profile_text"] if row else None
+    finally:
+        conn.close()
+
+
+def save_preference_profile(profile_text: str) -> None:
+    """Upsert the singleton preference profile row."""
+    with _db_lock:
+        conn = get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO preference_profile (id, profile_text, updated_at)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    profile_text = excluded.profile_text,
+                    updated_at   = excluded.updated_at
+                """,
+                (profile_text, datetime.now().strftime("%Y-%m-%d %H:%M")),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# process_status helpers — replaces seen_jobs.json (job_cache.py)
+
+def is_url_seen(url: str) -> bool:
+    """
+    Return True if url has already been scored ok, or previously
+    filtered/failed and not yet due for reprocessing.
+    Failed rows are treated as NOT seen so they get retried automatically.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT process_status FROM jobs WHERE url = ?", (url,)
+        ).fetchone()
+        if row is None:
+            return False
+        return row["process_status"] in ("ok", "filtered")
+    finally:
+        conn.close()
+
+
+def get_jobs_for_reprocessing() -> list[Job]:
+    """Return all jobs flagged failed / pending_reprocess."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE process_status IN ('failed', 'pending_reprocess')"
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def flag_for_reprocessing(job_id: int) -> None:
+    """Manually flag a single job for reprocessing (dashboard action)."""
+    with _db_lock:
+        conn = get_connection()
+        try:
+            conn.execute(
+                "UPDATE jobs SET process_status = 'pending_reprocess' WHERE id = ?",
+                (job_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def prune_filtered_jobs(days: int = 90) -> int:
+    """
+    Delete 'filtered' rows older than `days` days so previously-filtered
+    URLs become eligible for re-fetch/re-score if reposted.
+    Never touches 'ok' rows — real application history is not pruned.
+    Replaces job_cache.py's prune_cache().
+    """
+    cutoff = (datetime.now() - __import__("datetime").timedelta(days=days)).strftime("%Y-%m-%d")
+    with _db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.execute(
+                "DELETE FROM jobs WHERE process_status = 'filtered' AND date_seen < ?",
+                (cutoff,),
+            )
+            conn.commit()
+            return cursor.rowcount
+        finally:
+            conn.close()

@@ -35,7 +35,8 @@ from llm_client import invoke_llm
 
 logger = logging.getLogger(__name__)
 
-# PROFILE_PATH = "preference_profile.json"
+# # unified-db: profile via database
+from database import get_preference_profile, save_preference_profile
 PROFILE_PATH = os.path.join(DATA_DIR, "preference_profile.json")
 
 # Statuses that represent a deliberate decision by the user.

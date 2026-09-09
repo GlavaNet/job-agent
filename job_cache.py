@@ -1,101 +1,91 @@
 # job_cache.py
-import json
+# unified-db shim — seen_jobs.json is retired; process_status on the
+# jobs table now carries this information. This module keeps the same
+# public API (load_cache, save_cache, is_seen, mark_seen, filter_seen_jobs,
+# cache_stats, prune_cache) so job_scorer.py needs no changes.
 import logging
-import os
-from datetime import datetime, timedelta
 
-from config import DATA_DIR
+from database import (
+    get_connection,
+    is_url_seen,
+    prune_filtered_jobs,
+)
 from models import Job, JobCache
 
 logger = logging.getLogger(__name__)
 
-# CACHE_FILE = "seen_jobs.json"
-CACHE_FILE = os.path.join(DATA_DIR, "seen_jobs.json")
-
 
 def load_cache() -> JobCache:
     """
-    Load the seen-jobs cache from disk.
-    Returns an empty dict if the file does not exist or is corrupted.
+    Compatibility shim: returns a dict shaped like the old seen_jobs.json,
+    built from the jobs table. Callers that only check membership
+    (`url in cache`) work unchanged; is_seen()/mark_seen() below are the
+    preferred direct entry points and avoid loading the whole table.
     """
-    if not os.path.exists(CACHE_FILE):
-        return {}
+    conn = get_connection()
     try:
-        with open(CACHE_FILE, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
-        logger.warning("Cache file '%s' is corrupted — starting fresh", CACHE_FILE)
-        return {}
+        rows = conn.execute(
+            "SELECT url, title, company, score, date_seen FROM jobs "
+            "WHERE process_status IN ('ok', 'filtered')"
+        ).fetchall()
+        return {
+            row["url"]: {
+                "title": row["title"] or "",
+                "company": row["company"] or "",
+                "score": row["score"] or 0,
+                "date_seen": row["date_seen"] or "",
+            }
+            for row in rows
+        }
+    finally:
+        conn.close()
 
 
 def save_cache(cache: JobCache) -> None:
-    """Write the cache atomically by writing to a temp file then renaming."""
-    tmp = CACHE_FILE + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(cache, fh, indent=2)
-        os.replace(tmp, CACHE_FILE)
-    except OSError:
-        logger.exception("Failed to save cache to '%s'", CACHE_FILE)
-
-
-def is_seen(url: str, cache: JobCache) -> bool:
-    """Return True if this URL has been processed in a previous run."""
-    return url in cache
-
-
-def mark_seen(url: str, job: Job, cache: JobCache) -> None:
     """
-    Record a job URL in the cache with scoring metadata.
-    Call this after a job has been scored and processed.
+    No-op: writes now happen directly via upsert_job()/database helpers
+    at the point a job is scored. Kept only so existing call sites
+    (which call save_cache() after mark_seen()) don't need edits.
     """
-    cache[url] = {
-        "title": job.get("title", ""),
-        "company": job.get("company", ""),
-        "score": job.get("score", 0),
-        "date_seen": datetime.now().strftime("%Y-%m-%d"),
-    }
+    return
 
 
-def filter_seen_jobs(
-    jobs: list[Job], cache: JobCache
-) -> tuple[list[Job], int]:
+def is_seen(url: str, cache: JobCache | None = None) -> bool:
+    """Ignore the in-memory cache argument; query the DB directly."""
+    return is_url_seen(url)
+
+
+def mark_seen(url: str, job: Job, cache: JobCache | None = None) -> None:
     """
-    Remove jobs already present in the cache.
-    Returns (new_jobs, skipped_count).
+    No-op: job_scorer.py's _score_and_cache() already calls upsert_job()
+    (via the pipeline) with process_status derived from the score, so
+    the jobs table is the single source of truth. This function is kept
+    only for call-site compatibility.
     """
-    new_jobs = [j for j in jobs if not is_seen(j["url"], cache)]
+    return
+
+
+def filter_seen_jobs(jobs: list[Job], cache: JobCache | None = None) -> tuple[list[Job], int]:
+    """Remove jobs already present (ok/filtered) in the jobs table."""
+    new_jobs = [j for j in jobs if not is_url_seen(j["url"])]
     skipped = len(jobs) - len(new_jobs)
     return new_jobs, skipped
 
 
-def cache_stats(cache: JobCache) -> str:
-    """Return a human-readable summary of cache contents."""
-    if not cache:
-        return "Cache is empty"
-    total = len(cache)
-    scored = sum(1 for v in cache.values() if v.get("score", 0) >= 1)
-    return f"{total} jobs seen across all runs ({scored} previously scored)"
+def cache_stats(cache: JobCache | None = None) -> str:
+    conn = get_connection()
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE process_status IN ('ok', 'filtered')"
+        ).fetchone()[0]
+        scored = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE process_status = 'ok' AND score >= 1"
+        ).fetchone()[0]
+        return f"{total} jobs seen across all runs ({scored} previously scored)"
+    finally:
+        conn.close()
 
 
-def prune_cache(cache: JobCache, days: int = 90) -> int:
-    """
-    Remove entries older than `days` days so the cache does not grow
-    indefinitely. Returns the number of entries pruned.
-    Entries with a missing or malformed date are also removed.
-    """
-    cutoff = datetime.now() - timedelta(days=days)
-    to_remove = []
-
-    for url, data in cache.items():
-        try:
-            seen_date = datetime.strptime(data["date_seen"], "%Y-%m-%d")
-            if seen_date < cutoff:
-                to_remove.append(url)
-        except (KeyError, ValueError):
-            to_remove.append(url)
-
-    for url in to_remove:
-        del cache[url]
-
-    return len(to_remove)
+def prune_cache(cache: JobCache | None = None, days: int = 90) -> int:
+    """Delegates to database.prune_filtered_jobs(). Never prunes 'ok' rows."""
+    return prune_filtered_jobs(days=days)
