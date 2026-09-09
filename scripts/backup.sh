@@ -2,9 +2,13 @@
 #
 # Daily job-agent State Backup (3-2-1 rule)
 #
-# Backs up job-agent's state files as one bundle:
-#   jobs.db, manual_jobs.txt, preference_profile.json,
-#   processed_jobs.txt, seen_jobs.json
+# Backs up job-agent's state: jobs.db (SQLite).
+#
+# manual_jobs.txt, processed_jobs.txt, seen_jobs.json, and
+# preference_profile.json have all been retired - that state now lives
+# in jobs.db (manual_queue table, process_status column, and the
+# preference_profile table respectively), so jobs.db is the sole backup
+# target going forward.
 #
 # Copy 1: live state files (untouched by this script)
 # Copy 2: local backup on a second disk/mount
@@ -25,7 +29,7 @@
 #
 # Add to .env (see .env.backup.example):
 #   PROJECT_NAME=job-agent                    # used to name/tag backup files
-#   JOBAGENT_DATA_DIR=/path/to/job-agent       # dir containing the 5 state files - defaults to repo root
+#   JOBAGENT_DATA_DIR=/path/to/job-agent       # dir containing jobs.db - defaults to repo root
 #   BACKUP_LOCAL_DIR=/path/to/backups
 #   BACKUP_SECOND_DISK_DIR=/mnt/second-disk/backups
 #   BACKUP_AGE_RECIPIENT=age1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -103,11 +107,10 @@ LOG_MAX_BYTES="${BACKUP_LOG_MAX_BYTES:-5242880}"       # 5 MB default
 LOG_KEEP="${BACKUP_LOG_KEEP:-8}"                       # how many rotated logs to keep
 # -----------------------------
 
-# ---------- Resolve the state files to back up ----------
-# Unlike a single-DB project, job-agent's state is 5 named files living
-# together in one directory. JOBAGENT_DATA_DIR lets you point at that
-# directory explicitly; otherwise it defaults to the repo root (one level
-# up from scripts/), which is where job-agent keeps them by convention.
+# ---------- Resolve the data directory ----------
+# JOBAGENT_DATA_DIR lets you point at the directory containing jobs.db
+# explicitly; otherwise it defaults to the repo root (one level up from
+# scripts/), which is where job-agent keeps it by convention.
 DATA_DIR="${JOBAGENT_DATA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 if [ ! -d "$DATA_DIR" ]; then
@@ -116,30 +119,12 @@ if [ ! -d "$DATA_DIR" ]; then
 fi
 
 DB_NAME="jobs.db"
-STATE_FILES=(
-    "manual_jobs.txt"
-    "preference_profile.json"
-    "processed_jobs.txt"
-    "seen_jobs.json"
-)
 
 DB_PATH="$DATA_DIR/$DB_NAME"
 if [ ! -f "$DB_PATH" ]; then
     error "no $DB_NAME found at $DB_PATH. Set JOBAGENT_DATA_DIR in .env to the correct directory."
     exit 1
 fi
-
-# Flat files are backed up best-effort: warn and skip individually if one is
-# missing (e.g. seen_jobs.json hasn't been created yet on a fresh install)
-# rather than failing the whole backup over an optional file.
-PRESENT_STATE_FILES=()
-for f in "${STATE_FILES[@]}"; do
-    if [ -f "$DATA_DIR/$f" ]; then
-        PRESENT_STATE_FILES+=("$f")
-    else
-        warn "$f not found in $DATA_DIR - skipping (fine if it hasn't been created yet)."
-    fi
-done
 # -----------------------------
 
 # ---------- Config validation (fail fast, before touching any files) ----------
@@ -237,7 +222,7 @@ fi
 
 info "Starting backup: $STAMP"
 info "State directory: $DATA_DIR"
-info "Files: $DB_NAME ${PRESENT_STATE_FILES[*]}"
+info "Files: $DB_NAME"
 
 # ---------- Staging area for this run ----------
 STAGE_DIR=$(mktemp -d)
@@ -255,28 +240,22 @@ if [ "$INTEGRITY" != "ok" ]; then
     exit 1
 fi
 
-# 3. Copy the flat state files alongside the DB snapshot into the same
-#    staging dir, so everything ends up in one tarball together.
-for f in "${PRESENT_STATE_FILES[@]}"; do
-    cp "$DATA_DIR/$f" "$STAGE_DIR/$f"
-done
-
-# 4. Bundle into a single tar (uncompressed - gzip is applied as its own
+# 3. Bundle into a single tar (uncompressed - gzip is applied as its own
 #    step next, matching the CRM pipeline's compress-then-encrypt order).
 TAR_FILE="$LOCAL_BACKUP_DIR/$STAMP.tar"
-tar -cf "$TAR_FILE" -C "$STAGE_DIR" "$DB_NAME" "${PRESENT_STATE_FILES[@]}"
+tar -cf "$TAR_FILE" -C "$STAGE_DIR" "$DB_NAME"
 
-# 4b. Hash the plaintext tarball before it's touched by compression/encryption.
+# 3b. Hash the plaintext tarball before it's touched by compression/encryption.
 # gzip and age are both lossless/reversible, so this hash should match the
 # hash of the file restore.sh produces after decrypt+decompress, exactly,
 # every time. restore.sh compares against this sidecar to prove the restored
 # bundle is byte-for-byte identical to what was backed up here.
 sha256sum "$TAR_FILE" | awk '{print $1}' > "$LOCAL_BACKUP_DIR/$STAMP.tar.sha256"
 
-# 5. Compress
+# 4. Compress
 gzip "$TAR_FILE"
 
-# 6. Encrypt with age (asymmetric - only the private key holder can decrypt)
+# 5. Encrypt with age (asymmetric - only the private key holder can decrypt)
 age -r "$AGE_RECIPIENT" -o "$LOCAL_BACKUP_DIR/$STAMP.tar.gz.age" "$LOCAL_BACKUP_DIR/$STAMP.tar.gz"
 rm "$LOCAL_BACKUP_DIR/$STAMP.tar.gz"
 

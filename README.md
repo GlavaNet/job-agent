@@ -35,12 +35,13 @@ cp -r ~/job-agent/*.py ~/job-agent/templates ~/job-agent/search_profile.py .
 mkdir -p data/resume
 cp ~/job-agent/resume/resume.pdf data/resume/resume.pdf
 
-# If migrating an existing install, bring its state along too:
+# If migrating an existing install, bring its state along too. Everything
+# job-agent tracks now lives in jobs.db — manual_jobs.txt, processed_jobs.txt,
+# seen_jobs.json, and preference_profile.json have all been folded into
+# tables/columns in the database (manual_queue, process_status, and the
+# preference_profile table respectively) and no longer exist as separate
+# files, so this is the only file to bring over:
 cp ~/job-agent/jobs.db data/ 2>/dev/null || true
-cp ~/job-agent/manual_jobs.txt data/ 2>/dev/null || true
-cp ~/job-agent/processed_jobs.txt data/ 2>/dev/null || true
-cp ~/job-agent/seen_jobs.json data/ 2>/dev/null || true
-cp ~/job-agent/preference_profile.json data/ 2>/dev/null || true
 
 # 3. Environment
 cp .env.example .env
@@ -88,26 +89,48 @@ Dashboard is reachable at `http://localhost:5000`.
 | n8n `Job_Agent_Rejection_Detector.json` | dropped — no longer in use |
 | `n8n.service` | removed — no longer needed |
 | bare-metal Ollama install | `ollama` + `ollama-pull` containers |
+| `manual_jobs.txt`, `processed_jobs.txt`, `seen_jobs.json` | `jobs.db` (`manual_queue` table, `process_status` column) |
+| `preference_profile.json` | `jobs.db` (`preference_profile` table) |
 
 ## Path handling
 
 `config.py`, `database.py`, `job_cache.py`, and `preference_engine.py`
 all read `JOBAGENT_DATA_DIR` (defaulting to `.` for bare-metal
 compatibility). Every container here sets it to `/app/state`, which is
-bind-mounted from `./data` on the host — `jobs.db` and its WAL/SHM
-sidecars, `manual_jobs.txt`, `processed_jobs.txt`, `seen_jobs.json`,
-`preference_profile.json`, and `resume/resume.pdf` all land there,
-exactly mirroring the current bare-metal layout.
+bind-mounted from `./data` on the host. All of job-agent's runtime
+state now lives in a single file there — `jobs.db` (plus its WAL/SHM
+sidecars) — alongside `resume/resume.pdf`. The four flat files this
+directory used to hold (`manual_jobs.txt`, `processed_jobs.txt`,
+`seen_jobs.json`, `preference_profile.json`) have all been migrated
+into `jobs.db` and are no longer written anywhere.
 
-## Known gaps to decide on later
+## Backups
 
-- **Backups**: `scripts/backup.sh` can keep running on the host,
-  pointed at `./data` via `JOBAGENT_DATA_DIR` — it doesn't need to run
-  inside a container, since `./data` is a normal host directory.
+`./data` is a normal host directory (bind-mounted, not a named Docker
+volume), so `scripts/backup.sh` runs on the host exactly as it does in
+the bare-metal setup — it needs no container access and is unaffected
+by `docker compose up`/`down`/rebuilds. Point it at the Docker layout
+by setting in `.env`:
+
+```
+JOBAGENT_DATA_DIR=/path/to/job-agent/data
+```
+
+`backup.sh` now backs up `jobs.db` only — the four flat files it used
+to bundle alongside it are retired (see Path handling above). Install
+the daily schedule the same way as bare-metal:
+
+```bash
+./scripts/check-deps.sh              # verify sqlite3/tar/age/gzip + .env are set up
+./scripts/install-backup-cron.sh     # or install-backup-systemd.sh
+./scripts/backup.sh                  # run once manually to confirm it works end-to-end
+```
+
+Ollama's model weights (`ollama-models` volume) are intentionally not
+backed up — they're re-pulled on demand by the `ollama-pull` container
+and aren't user state.
+
+## Other known gaps
+
 - **email_url_filter.py / rejection_detector.py**: no longer called by
-  anything now that n8n is gone. Left in the repo untouched per your
-  call — safe to remove later whenever you clean up.
-- **GPU inference**: Ollama runs CPU-only in the container by default,
-  same as before. Uncomment the `deploy:` block under the `ollama`
-  service in `compose.yaml` if this box has an NVIDIA GPU and
-  `nvidia-container-toolkit` installed.
+  anything now that n8n is gone.

@@ -48,7 +48,7 @@ DATA_DIR="${JOBAGENT_DATA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 [ -n "${BACKUP_AGE_RECIPIENT:-}" ] && pass "BACKUP_AGE_RECIPIENT is set" || fail "BACKUP_AGE_RECIPIENT is not set"
 
 echo ""
-echo "=== Checking state files in $DATA_DIR ==="
+echo "=== Checking state directory in $DATA_DIR ==="
 if [ -d "$DATA_DIR" ]; then
     pass "state directory found: $DATA_DIR"
     if [ -f "$DATA_DIR/jobs.db" ]; then
@@ -56,13 +56,6 @@ if [ -d "$DATA_DIR" ]; then
     else
         fail "jobs.db not found in $DATA_DIR - backup.sh requires this file"
     fi
-    for f in manual_jobs.txt preference_profile.json processed_jobs.txt seen_jobs.json; do
-        if [ -f "$DATA_DIR/$f" ]; then
-            pass "$f found"
-        else
-            warn "$f not found in $DATA_DIR yet (fine on a fresh install - backup.sh skips missing optional files)"
-        fi
-    done
 else
     fail "JOBAGENT_DATA_DIR is set to $DATA_DIR but that directory doesn't exist"
 fi
