@@ -11,7 +11,7 @@ pymupdf>=1.24
 # Headless browser / scraping
 scrapling>=0.2
 curl_cffi>=0.7
-playwright>=1.58.0
+playwright>=1.47.0
 patchright>=1.52.0
 msgspec>=0.21.1
 browserforge>=1.2.4

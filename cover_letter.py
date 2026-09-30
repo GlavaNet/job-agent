@@ -69,6 +69,13 @@ _NO_RESEARCH_NOTE = (
     "No company research available — write based on the job description alone."
 )
 
+# Appended verbatim to every generated cover letter, in code rather than via
+# the prompt, so the exact wording is guaranteed regardless of what the LLM
+# produces (no risk of paraphrasing, dropping, or burying it mid-letter).
+CLOSING_NOTICE = (
+    "Please note: I request human review of my application and opt out of "
+    "automated decision making where permitted."
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -154,7 +161,9 @@ def generate_cover_letter(
         description=(job.get("description") or "")[:CL_DESCRIPTION_CHARS],
         company_research=research_block,
     )
-    return invoke_llm(prompt)
+    # return invoke_llm(prompt)
+    letter = invoke_llm(prompt)
+    return letter.rstrip() + "\n\n" + CLOSING_NOTICE
 
 
 def get_resume_text_for_job(job_id: int) -> str:

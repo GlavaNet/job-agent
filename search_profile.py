@@ -14,9 +14,13 @@ Sections
 2. SOURCE SETTINGS       — per-source tuning (location, salary, etc.)
 3. GREENHOUSE COMPANIES  — employers to query directly via Greenhouse
 4. SENIORITY FILTERS     — title / description words that disqualify a role
+4b. DOMAIN FILTERS       — title / description words outside IT/tech entirely
+4c. SALARY SENIORITY     — salary figure that implies a senior-level role
 5. EMPLOYMENT TYPE       — exclude part-time, contract, temporary, etc.
 6. REQUIREMENT FILTERS   — clearances or other hard deal-breakers
-7. PIPELINE TUNING       — scoring threshold, per-source cap, etc.
+8. MUNICIPAL FILTER      — exclude city/county/state jobs outside CA
+8b. GENERAL OPPORTUNITY  — exclude talent-pool / no-specific-role postings
+9. PIPELINE TUNING       — scoring threshold, per-source cap, etc.
 """
 
 # ===========================================================================
@@ -154,6 +158,66 @@ SENIOR_EXPERIENCE_YEAR_THRESHOLD: int = 7
 
 
 # ===========================================================================
+# 4b. DOMAIN FILTERS  (title & description)
+# ===========================================================================
+# Jobs whose title or description strongly indicates a field outside
+# IT/tech entirely (retail, food service, healthcare, general clerical
+# work, etc.) are automatically skipped before scoring.
+#
+# This exists because an LLM scorer can be fooled by incidental technical
+# keywords in a non-IT posting (e.g. "point-of-sale system" in a retail
+# listing, "scheduling software" in an admin-assistant listing) into
+# assigning a misleadingly high relevance score. This filter is coarse
+# and conservative by design — it is meant to catch obvious non-IT
+# postings, not make fine-grained domain judgments. If you see a
+# legitimate IT title get caught here, narrow the specific keyword
+# rather than removing it outright.
+#
+# Adjust these lists if your target roles legitimately overlap with any
+# of these fields (e.g. health-IT, retail-tech) — the keywords below
+# assume no such overlap.
+
+EXCLUDE_DOMAIN_TITLE_KEYWORDS: list[str] = [
+    # Retail / food service / hospitality
+    "retail associate", "sales associate", "store associate",
+    "cashier", "barista", "server", "bartender", "waitstaff",
+    "waiter", "waitress", "host/hostess", "line cook", "chef",
+    "restaurant", "hospitality",
+    # Healthcare (clinical roles — not health-IT)
+    "registered nurse", "rn ", " rn,", "nurse practitioner", "nursing",
+    "cna", "medical assistant", "phlebotomist", "physical therapist",
+    "dental hygienist", "pharmacy technician",
+    # General administrative / clerical (non-technical)
+    "administrative assistant", "office assistant", "receptionist",
+    "data entry clerk", "front desk",
+    # Other common false-positive domains
+    "delivery driver", "warehouse associate", "forklift operator",
+    "teacher", "substitute teacher", "childcare", "daycare",
+    "real estate agent", "insurance agent", "loan officer",
+]
+
+EXCLUDE_DOMAIN_DESCRIPTION_PHRASES: list[str] = [
+    "folding clothes", "operating a cash register", "point-of-sale system",
+    "patient care", "clinical setting", "bedside manner",
+    "food safety certification", "serving customers",
+]
+
+
+# ===========================================================================
+# 4c. SALARY-IMPLIED SENIORITY THRESHOLD
+# ===========================================================================
+# Jobs with an annual salary at or above this figure are treated as
+# senior-level and filtered out via is_too_senior() in job_scorer.py —
+# UNLESS the posting's body text specifically calls for education or
+# experience consistent with a lower-tier role (e.g. "entry level",
+# "no experience required" — see _LOWER_TIER_OVERRIDE_PHRASES in
+# job_scorer.py). A high number alone isn't proof of seniority; a
+# posting that explicitly says otherwise is taken at its word.
+
+SALARY_SENIOR_THRESHOLD: int = 120_000
+
+
+# ===========================================================================
 # 5. EMPLOYMENT TYPE FILTERS
 # ===========================================================================
 # Jobs that appear to be contract, part-time, or temporary are skipped.
@@ -215,7 +279,69 @@ EXCLUDE_REQUIREMENT_KEYWORDS: list[str] = [
 
 
 # ===========================================================================
-# 7. PIPELINE TUNING
+# 8. MUNICIPAL / GOVERNMENT LOCATION FILTER
+# ===========================================================================
+# Jobs posted by a city, county, or state municipality are filtered out
+# entirely via is_municipal_non_ca() in job_scorer.py — UNLESS the role
+# is based in California or the posting explicitly states it is remote.
+#
+# Matched against company name and job title only (NOT the description),
+# to avoid false positives from postings that merely mention a "City of
+# X" client or contract in passing (e.g. a private-sector network
+# engineering role whose description references municipal clients).
+
+MUNICIPAL_EMPLOYER_KEYWORDS: list[str] = [
+    "city of ", "county of ", "town of ", "township of ", "village of ",
+    "state of ", "borough of ",
+    "department of public works", "sheriff's office", "sheriff office",
+    "police department", "fire department", "county government",
+    "city government", "municipal government", "municipality",
+    "county clerk", "city clerk", "county administration",
+]
+
+# Tokens matched against the job's location field for the "within
+# California" exemption.
+CALIFORNIA_LOCATION_TOKENS: list[str] = [
+    "california", " ca ", " ca,", " ca-", ", ca", "ca 9",  # "CA 9xxxx" zip
+]
+
+
+# ===========================================================================
+# 8b. GENERAL OPPORTUNITY / TALENT POOL FILTER
+# ===========================================================================
+# Postings where the hiring entity isn't filling a specific open role but
+# is instead collecting résumés for future consideration ("general
+# application", "talent pool", "always hiring", etc.) are filtered out
+# via is_general_opportunity_posting() in job_scorer.py and hard-scored
+# 1/10 in effect — since filter_and_score_jobs() only saves jobs scoring
+# at or above RELEVANCE_THRESHOLD, excluding them here achieves the same
+# outcome without spending an LLM call on a posting that isn't a real,
+# fillable position.
+#
+# Matched against both title and description — unlike the municipal
+# filter, these phrases are specific enough that description-matching
+# is low-risk (a real job posting is unlikely to casually mention
+# "talent pool" or "general application" the way it might mention an
+# unrelated municipal client).
+
+GENERAL_OPPORTUNITY_KEYWORDS: list[str] = [
+    "general application", "general interest", "general opportunities",
+    "future opportunities", "future openings", "future opening",
+    "talent pool", "talent community", "talent network",
+    "candidate pool", "resume database", "résumé database",
+    "various roles", "various positions", "multiple positions available",
+    "we're always hiring", "always hiring", "always looking for talent",
+    "no specific position", "not a specific role",
+    "express interest", "submit your resume for consideration",
+    "join our talent", "stay on file", "keep on file",
+    "future consideration", "when a position becomes available",
+    "when a role becomes available", "as positions become available",
+    "evergreen requisition", "evergreen posting",
+]
+
+
+# ===========================================================================
+# 9. PIPELINE TUNING
 # ===========================================================================
 
 # Minimum LLM relevance score (1-10) a job must achieve to be saved.

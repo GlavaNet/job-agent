@@ -95,8 +95,13 @@ DATA_DIR = os.getenv("JOBAGENT_DATA_DIR", ".")
 # ---------------------------------------------------------------------------
 
 RESUME_PATH           = os.path.join(DATA_DIR, "resume", "resume.pdf")
-MANUAL_JOBS_FILE      = os.path.join(DATA_DIR, "manual_jobs.txt")
-PROCESSED_JOBS_FILE   = os.path.join(DATA_DIR, "processed_jobs.txt")
+
+# unified-db: retired file paths
+# manual_jobs.txt and processed_jobs.txt are replaced by the manual_queue
+# table in jobs.db (see database.py). These constants are kept only in
+# case a script outside this patch set still imports them.
+MANUAL_JOBS_FILE      = None
+PROCESSED_JOBS_FILE   = None
 
 # RESUME_PATH           = "resume/resume.pdf"
 # MANUAL_JOBS_FILE      = "manual_jobs.txt"

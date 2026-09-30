@@ -1,23 +1,33 @@
 # ---------------------------------------------------------------------------
-# job-agent — Docker Compose stack
+# job-agent — Docker Compose stack (host llama-server variant)
 #
-# Five services, three images:
-#   job-agent           (Dockerfile)          — runner (job_agent.py's
-#                                                manual_job_scraper needs
-#                                                Playwright for Dice)
-#   job-agent-slim      (Dockerfile.slim)     — dashboard, listener (no
-#                                                Playwright anywhere in
-#                                                their import graph)
-#   job-agent-scheduler (Dockerfile.scheduler, FROM job-agent-slim) —
-#                                                cron: daily pipeline
-#                                                trigger + daily autogen
+# This is a variant of the standard compose.yaml for installs that run
+# their own OpenAI-compatible LLM backend on the HOST rather than using
+# the bundled `ollama` container — e.g. llama.cpp's `llama-server`. See
+# README.md > "Using an external LLM backend on the host" for the full
+# explanation of why this variant exists and what it changes.
 #
-# n8n is NOT part of this stack. Both n8n workflows that used to justify
-# it (email digest scanning, rejection-email detection) are no longer in
-# use — job discovery now relies on the scheduled pipeline runs plus the
-# ntfy phone-share flow (inbox_listener.py -> manual_jobs.txt), and
-# rejection handling is manual. The `scheduler` service's cron replaces
-# n8n's remaining job: the daily HTTP trigger to runner.py's /run route.
+# Summary of the difference from the standard compose.yaml:
+#   - No `ollama` / `ollama-pull` services or `ollama-models` volume.
+#   - Every service's LLM_BASE_URL points at host.docker.internal, which
+#     resolves to the Docker bridge gateway IP via `extra_hosts` below.
+#   - The `default` network's subnet is PINNED (see `ipam:` below)
+#     instead of left to Compose's auto-assignment. This is the actual
+#     fix for the host-networking problem: on Linux, Docker Compose
+#     creates a bridge interface with an auto-generated name
+#     (br-<hash>) that changes on every `docker compose down` + fresh
+#     `up` (not every restart — only when the network itself is
+#     recreated). Any host firewall rule written against that
+#     interface name (ufw, iptables -I DOCKER-USER, etc.) silently
+#     breaks the next time the network is recreated. Pinning the
+#     subnet here means the firewall rule can match on a stable CIDR
+#     instead of an unstable interface name, and never needs to be
+#     rewritten again.
+#
+# See README.md for the one-time host firewall setup this variant
+# requires (ufw + iptables DOCKER-USER rule) — Compose alone cannot
+# open host firewall ports; that step still has to happen once, outside
+# Docker, on the host.
 #
 # --- Path layout ------------------------------------------------------
 # config.py, database.py, job_cache.py, and preference_engine.py all
@@ -40,61 +50,27 @@
 # First-time setup on the host:
 #   mkdir -p data/resume
 #   cp /path/to/your/resume.pdf data/resume/resume.pdf
-#   cp .env.example .env   # fill in secrets
+#   cp .env.example .env   # fill in secrets, set LLM_BASE_URL (see README)
+#   # then do the one-time firewall setup in README.md before `up`
 #
 # Everyday use:
 #   docker compose logs -f dashboard
 #   docker compose logs -f scheduler                        # cron output
 #   docker compose exec runner python3 /app/job_agent.py    # one-off manual run
-#   docker compose exec runner curl -X POST localhost:8888/run  # trigger via HTTP, like cron does
+#   docker compose exec runner sh -c 'curl -X POST localhost:8888/run -H "Authorization: Bearer $RUNNER_SECRET"'
 #   docker compose exec dashboard sqlite3 /app/state/jobs.db
 # ---------------------------------------------------------------------------
 
 x-jobagent-volumes: &jobagent-volumes
   - ./data:/app/state
 
+# Every service needs this to resolve host.docker.internal on Linux —
+# Docker Desktop (Mac/Windows) provides it automatically, but plain
+# Docker Engine on Linux does not unless each service declares it.
+x-extra-hosts: &host-gateway
+  - "host.docker.internal:host-gateway"
+
 services:
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: job-agent-ollama
-    restart: unless-stopped
-    volumes:
-      - ollama-models:/root/.ollama
-    ports:
-      # Exposed to the host too, so you can `ollama pull` / debug directly.
-      # Drop this if you don't want it reachable outside the compose network.
-      - "127.0.0.1:11434:11434"
-    # Uncomment for GPU access (requires nvidia-container-toolkit):
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-
-  # One-shot init container: pulls the model into the shared ollama-models
-  # volume on first start, then exits. Other services wait on this via
-  # `condition: service_completed_successfully`.
-  ollama-pull:
-    image: ollama/ollama:latest
-    container_name: job-agent-ollama-pull
-    depends_on:
-      ollama:
-        condition: service_healthy
-    volumes:
-      - ollama-models:/root/.ollama
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >
-        OLLAMA_HOST=ollama:11434 ollama pull ${OLLAMA_MODEL:-llama3.1:8b}
 
   runner:
     build:
@@ -106,14 +82,9 @@ services:
     command: ["python3", "/app/runner.py"]
     env_file: .env
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
       JOBAGENT_DATA_DIR: /app/state
+    extra_hosts: *host-gateway
     volumes: *jobagent-volumes
-    depends_on:
-      ollama:
-        condition: service_healthy
-      ollama-pull:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8888/status').status==200 else 1)"]
       interval: 30s
@@ -134,16 +105,11 @@ services:
     command: ["python3", "/app/dashboard.py"]
     env_file: .env
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
       JOBAGENT_DATA_DIR: /app/state
+    extra_hosts: *host-gateway
     volumes: *jobagent-volumes
     ports:
       - "5000:5000"
-    depends_on:
-      ollama:
-        condition: service_healthy
-      ollama-pull:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/healthz').status==200 else 1)"]
       interval: 30s
@@ -161,14 +127,9 @@ services:
     command: ["python3", "/app/inbox_listener.py"]
     env_file: .env
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
       JOBAGENT_DATA_DIR: /app/state
+    extra_hosts: *host-gateway
     volumes: *jobagent-volumes
-    depends_on:
-      ollama:
-        condition: service_healthy
-      ollama-pull:
-        condition: service_completed_successfully
 
   # Replaces job-agent-autogen.timer AND n8n's "Job Agent Daily Run"
   # workflow (see Dockerfile.scheduler for both cron lines and the
@@ -182,21 +143,25 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
       JOBAGENT_DATA_DIR: /app/state
+    extra_hosts: *host-gateway
     volumes: *jobagent-volumes
     depends_on:
-      ollama:
-        condition: service_healthy
-      ollama-pull:
-        condition: service_completed_successfully
       runner:
         condition: service_healthy
-
-volumes:
-  ollama-models:
-    # Pulled models persist here across container recreates/rebuilds.
 
 networks:
   default:
     name: job-agent-net
+    driver: bridge
+    ipam:
+      config:
+        # Pinned so the bridge subnet never changes across
+        # `docker compose down` + `up` cycles. This is what lets the
+        # host firewall rule (see README) target a stable CIDR instead
+        # of an auto-generated interface name that changes each time
+        # the network is recreated. Pick any private /16 that doesn't
+        # collide with your LAN, Tailscale range, or other Docker
+        # networks on this host (check with `docker network ls` +
+        # `docker network inspect <name>` before changing this).
+        - subnet: 172.28.0.0/16

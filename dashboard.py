@@ -156,6 +156,14 @@ def logout():
     session.clear()
     return redirect(url_for("login"))
 
+@app.route("/healthz")
+def healthz():
+    try:
+        get_stats()
+    except Exception:
+        logger.exception("[healthz] Database check failed")
+        return jsonify({"status": "unhealthy"}), 503
+    return jsonify({"status": "ok"}), 200
 
 # ---------------------------------------------------------------------------
 # Page routes

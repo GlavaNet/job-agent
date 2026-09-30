@@ -19,9 +19,13 @@ FROM mcr.microsoft.com/playwright/python:v1.47.0-jammy
 
 WORKDIR /app
 
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=America/Los_Angeles
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
         sqlite3 \
         build-essential \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Base deps first (small, changes rarely), then scraping deps (large,
