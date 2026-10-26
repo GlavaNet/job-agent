@@ -30,3 +30,8 @@ build/
 
 # --- Backups ---
 *.bak
+data/
+*.backup.*
+cleanup_log.txt
+calcareers_cleanup_log.txt
+*.bak[0-9]*
